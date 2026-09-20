@@ -325,6 +325,24 @@ html, body {
 }
 .trace-stats dt { color: var(--dim); }
 .trace-stats dd { margin: 0; color: var(--fg); text-align: right; font-variant-numeric: tabular-nums; }
+.record { display: grid; gap: 10px; justify-items: center; width: 100%; }
+.record-bar {
+  width: min(260px, 80%);
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-lift);
+  overflow: hidden;
+}
+.record-bar[hidden] { display: none; }
+.record-bar span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--sharp);
+  border-radius: 999px;
+}
+.save.armed { background: var(--sharp); color: #1a0a05; }
+
 .save {
   appearance: none;
   border: 0;

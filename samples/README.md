@@ -14,10 +14,15 @@ settled pitch taken from the note's quiet tail. It also writes
 
 ## How to record
 
-Record with the app: **Start → Trace → pluck → Save recording (WAV)**. The panel
-updates live, so it can stay open while you play. That captures the last 15
-seconds of raw microphone audio, before any filtering, so a replay can also try
-different filter choices.
+Record with the app: **Trace → Record 15 s → play**. The button counts down and
+the file downloads itself when the fifteen seconds are up, so nothing has to be
+timed by hand. Tapping it again mid-recording cancels. It captures raw
+microphone audio, before any filtering, so a replay can also try filter choices
+other than the app's. Half a second before the tap is included, in case the tap
+came a moment late.
+
+The panel keeps updating while you play, so leave it open for the whole session:
+tap, play, wait for the download, repeat.
 
 Set the **String** selector to the string you are recording — it goes into the
 filename.
@@ -32,23 +37,23 @@ Rules that make the set usable:
   the noise floor to know what silence sounds like.
 - **Keep the phone in one place** for the whole session, wherever you would
   actually put it while tuning.
-- **Save within 15 seconds** of the pluck, or the buffer will have rolled past it.
+- **Tap Record first, then play.** The recording always runs a fixed 15 seconds.
 
 ## What to record, per string
 
 | # | File | What to play |
 | --- | --- | --- |
-| 1 | `<string>-1-reference.wav` | The *softest* pluck that still rings clearly. Let it ring until you can no longer hear it, or until ~13 s. **This is the ground truth** — the tail of a quiet note is the settled pitch to a fraction of a cent. |
-| 2 | `<string>-2-normal.wav` | A normal pluck, the way you would play while tuning. Let it ring ~6 s. |
+| 1 | `<string>-1-reference.wav` | The *softest* pluck that still rings clearly, right after the tap. Let it ring for the whole 15 s — don't stop it. **This is the ground truth**: the tail of a quiet note is the settled pitch to a fraction of a cent. |
+| 2 | `<string>-2-normal.wav` | A normal pluck, the way you would play while tuning. Let it ring out. |
 | 3 | `<string>-3-hard.wav` | The hardest pluck you would realistically use. Maximum pitch glide — the case that misleads a tuner most. |
-| 4 | `<string>-4-replucks.wav` | Four normal plucks about 1.5 s apart, never letting the string go quiet. A re-pluck beats against the note still ringing, which is where a wrong-turn bug was already found. |
-| 5 | `<string>-5-pegturn.wav` | Pluck normally, let it settle ~2 s, then **slowly turn the peg flat** by roughly a quarter tone over ~3 s while it rings. Do this one **last** for the string and re-tune afterwards. |
+| 4 | `<string>-4-replucks.wav` | Normal plucks about 1.5 s apart for the whole 15 s, never letting the string go quiet. A re-pluck beats against the note still ringing, which is where a wrong-turn bug was already found. |
+| 5 | `<string>-5-pegturn.wav` | Pluck normally, let it settle ~2 s, then **slowly turn the peg flat** by roughly a quarter tone over ~3 s while it rings. Re-pluck once and let it ring. Do this one **last** for the string, then re-tune it. |
 
 ## Two extra recordings for the session
 
 | File | What to play |
 | --- | --- |
-| `room-tone.wav` | ~13 s of silence, phone where you normally put it, nothing played. Characterises the noise floor and any hum. |
+| `room-tone.wav` | Tap record and play nothing at all. Characterises the noise floor and any hum. |
 | `open-strum.wav` | All six strings strummed once, left to ring. Tests picking one string out of a chord. |
 
 Six strings × 5, plus those two, is 32 files. Fewer is still useful — recording

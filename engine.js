@@ -7,7 +7,8 @@ import { PitchDetector } from './pitch.js';
 const RING_BITS = 17;            // 131072 samples — 2.7 s, covers the longest baseline
 const WINDOW_SIZE = 8192;        // ~170 ms, enough periods for a low B string
 const ENVELOPE_SECONDS = 0.025;
-const TAPE_SECONDS = 15;         // raw audio kept for export
+const TAPE_SECONDS = 18;         // raw audio kept for export, with headroom
+                                 // so a 15 s capture cannot be overwritten mid-save
 const HIGHPASS_HZ = 25;          // handling rumble and DC
 const LOWPASS_HZ = 3500;         // hiss above anything musical
 
@@ -79,11 +80,12 @@ export class Engine {
     return true;
   }
 
-  /** The most recent `seconds` of raw audio, for exporting a recording. */
-  snapshot(seconds) {
-    const count = Math.min(Math.round(seconds * this.sampleRate), this.tape.length, this.taped);
+  /** Raw audio between two absolute tape positions, clipped to what is still held. */
+  tapeSlice(from, to) {
+    const end = Math.min(to, this.taped);
+    const start = Math.max(from, 0, end - this.tape.length);
+    const count = Math.max(0, end - start);
     const out = new Float32Array(count);
-    const start = this.taped - count;
     for (let i = 0; i < count; i++) out[i] = this.tape[(start + i) % this.tape.length];
     return out;
   }

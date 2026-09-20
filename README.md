@@ -76,10 +76,11 @@ It is the fastest way to see *why* a mode did something — a reading that drift
 a fit that over-extrapolates, or a string that stopped being heard are all
 obvious in the plot and invisible in the number.
 
-**Save recording (WAV)** writes the last 15 seconds of audio as the tuner heard
-it. See `samples/README.md` for replaying recordings through every mode with
-`tools/analyse-wav.mjs` — that replay is how the wrong-turn bug in the phase
-unwrapper was found, on the second pluck of a still-ringing string.
+**Record 15 s** captures raw microphone audio and downloads it when the countdown
+finishes, so a recording session is tap-play-repeat with no timing by hand. See
+`samples/README.md` for the recording protocol and for replaying files through
+every mode with `tools/analyse-wav.mjs` — that replay is how the wrong-turn bug
+in the phase unwrapper was found, on the second pluck of a still-ringing string.
 
 ## Target string lock
 

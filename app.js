@@ -4,6 +4,8 @@ import { renderTrace } from './trace.js';
 
 const NOTE_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 const TICK_MS = 40;
+const RECORD_SECONDS = 15;
+const RECORD_PREROLL = 0.5;     // a moment before the tap, in case it came late
 const IN_TUNE_CENTS = 3;
 const MAX_DEFLECTION = 70;      // degrees at ±50 cents
 
@@ -49,6 +51,7 @@ let trace = null;
 let lastTrace = null;
 let traceScales = null;
 let traceOpen = false;
+let recording = null;
 
 buildTicks();
 buildControls();
@@ -64,7 +67,7 @@ document.getElementById('traceClose').addEventListener('click', () => {
   traceOpen = false;
   tracePanel.hidden = true;
 });
-document.getElementById('saveBtn').addEventListener('click', saveRecording);
+document.getElementById('saveBtn').addEventListener('click', toggleRecording);
 traceChart.addEventListener('pointermove', onTracePointer);
 traceChart.addEventListener('pointerdown', onTracePointer);
 traceChart.addEventListener('pointerleave', () => { traceReadout.textContent = ''; });
@@ -196,6 +199,8 @@ function stop() {
   startBtn.classList.remove('ghost');
   currentMidi = null;
   trace = null;
+  recording = null;
+  showRecordState();
   render(null);
   needleAngle = 0;
   displayedCents = 0;
@@ -243,6 +248,7 @@ function loop(now) {
     const reading = estimator.update(frame);
     recordTrace(frame, reading);
     render(reading);
+    pollRecording();
     if (traceOpen) drawTrace();
   }
   animateNeedle();
@@ -405,18 +411,73 @@ function onTracePointer(event) {
     : `${nearest.t.toFixed(2)} s · no pitch`;
 }
 
-function saveRecording() {
+async function toggleRecording() {
+  if (recording) {          // tapping again cancels
+    recording = null;
+    showRecordState();
+    return;
+  }
+  if (!listening) {
+    await start();
+    if (!listening) return; // mic refused — the error message says why
+  }
   if (!engine) return;
-  const samples = engine.snapshot(15);
+  recording = {
+    from: Math.max(0, engine.taped - Math.round(RECORD_PREROLL * engine.sampleRate)),
+    to: engine.taped + Math.round(RECORD_SECONDS * engine.sampleRate),
+  };
+  showRecordState();
+}
+
+/** Driven by captured samples rather than the clock, so the bar tracks the audio. */
+function pollRecording() {
+  if (!recording || !engine) return;
+  if (engine.taped >= recording.to) {
+    const { from, to } = recording;
+    recording = null;
+    saveRecording(engine.tapeSlice(from, to));
+  }
+  showRecordState();
+}
+
+function showRecordState() {
+  const button = document.getElementById('saveBtn');
+  const bar = document.getElementById('recordBar');
+  const fill = document.getElementById('recordFill');
+
+  if (!recording || !engine) {
+    button.textContent = `Record ${RECORD_SECONDS} s`;
+    button.classList.remove('armed');
+    bar.hidden = true;
+    fill.style.width = '0%';
+    return;
+  }
+  const total = recording.to - recording.from;
+  const done = Math.min(total, Math.max(0, engine.taped - recording.from));
+  const left = Math.max(0, (recording.to - engine.taped) / engine.sampleRate);
+  button.textContent = `Recording — ${Math.ceil(left)} s`;
+  button.classList.add('armed');
+  bar.hidden = false;
+  fill.style.width = `${((done / total) * 100).toFixed(1)}%`;
+}
+
+function saveRecording(samples) {
   const blob = new Blob([encodeWav(samples, engine.sampleRate)], { type: 'audio/wav' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(11, 19);
   const string = STRINGS.find((s) => s.id === settings.string);
   link.download = `tunedup-${string && string.midi !== null ? string.id : 'note'}-${stamp}.wav`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+  const note = document.getElementById('panelNote');
+  note.textContent = `Saved ${link.download}`;
+  clearTimeout(saveRecording.timer);
+  saveRecording.timer = setTimeout(() => {
+    note.textContent = 'Tap, play, and it downloads itself when the 15 seconds are up.';
+  }, 6000);
 }
 
 function encodeWav(samples, sampleRate) {

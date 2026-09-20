@@ -81,8 +81,11 @@
   <svg id="traceChart" class="trace-chart" viewBox="0 0 360 262" role="img" aria-label="Pitch over time since the pluck"></svg>
   <p id="traceReadout" class="trace-readout"></p>
   <dl id="traceStats" class="trace-stats"></dl>
-  <button id="saveBtn" class="save" type="button">Save recording (WAV)</button>
-  <p class="panel-note">Saves the last 15 seconds of audio. Send me the file and I can replay it through every mode.</p>
+  <div class="record">
+    <button id="saveBtn" class="save" type="button">Record 15 s</button>
+    <div id="recordBar" class="record-bar" hidden><span id="recordFill"></span></div>
+  </div>
+  <p id="panelNote" class="panel-note">Tap, play, and it downloads itself when the 15 seconds are up.</p>
 </section>
 
 <script type="module" src="./app.js"></script>
