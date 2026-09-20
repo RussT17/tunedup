@@ -1,5 +1,6 @@
 import { Engine } from './engine.js';
 import { MODES, STRINGS, createEstimator } from './estimators.js';
+import { renderTrace } from './trace.js';
 
 const NOTE_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 const TICK_MS = 40;
@@ -16,6 +17,10 @@ const hintEl = document.getElementById('hint');
 const startBtn = document.getElementById('startBtn');
 const errorEl = document.getElementById('errorText');
 const blurbEl = document.getElementById('modeBlurb');
+const tracePanel = document.getElementById('tracePanel');
+const traceChart = document.getElementById('traceChart');
+const traceStats = document.getElementById('traceStats');
+const traceReadout = document.getElementById('traceReadout');
 const refSelect = document.getElementById('refSelect');
 const modeSelect = document.getElementById('modeSelect');
 const stringSelect = document.getElementById('stringSelect');
@@ -39,9 +44,30 @@ let displayedCents = 0;
 let needleAngle = 0;
 let currentMidi = null;
 
+// Per-note trace: every frame of the current pluck, kept so it can be plotted.
+let trace = null;
+let lastTrace = null;
+let traceScales = null;
+let traceOpen = false;
+
 buildTicks();
 buildControls();
 render(null);
+
+document.getElementById('traceBtn').addEventListener('click', (event) => {
+  event.stopPropagation();
+  traceOpen = true;
+  tracePanel.hidden = false;
+  drawTrace();
+});
+document.getElementById('traceClose').addEventListener('click', () => {
+  traceOpen = false;
+  tracePanel.hidden = true;
+});
+document.getElementById('saveBtn').addEventListener('click', saveRecording);
+traceChart.addEventListener('pointermove', onTracePointer);
+traceChart.addEventListener('pointerdown', onTracePointer);
+traceChart.addEventListener('pointerleave', () => { traceReadout.textContent = ''; });
 
 startBtn.addEventListener('click', (event) => {
   event.stopPropagation();
@@ -173,6 +199,7 @@ function stop() {
   startBtn.textContent = 'Start tuning';
   startBtn.classList.remove('ghost');
   currentMidi = null;
+  trace = null;
   render(null);
   needleAngle = 0;
   displayedCents = 0;
@@ -217,7 +244,10 @@ function loop(now) {
   if (now - lastTickAt >= TICK_MS && document.visibilityState === 'visible') {
     lastTickAt = now;
     const frame = engine.analyse();
-    render(estimator.update(frame));
+    const reading = estimator.update(frame);
+    recordTrace(frame, reading);
+    render(reading);
+    if (traceOpen) drawTrace();
   }
   animateNeedle();
 }
@@ -295,6 +325,128 @@ function animateNeedle() {
   const target = (clamp(displayedCents, -50, 50) / 50) * MAX_DEFLECTION;
   needleAngle += (target - needleAngle) * 0.22;
   needleEl.style.transform = `rotate(${needleAngle.toFixed(2)}deg)`;
+}
+
+/* ------------------------------------------------------------------ trace */
+
+function recordTrace(frame, reading) {
+  if (frame.onsetAge === null) return;
+  if (!trace || trace.onsetId !== frame.onsetId) {
+    if (trace && trace.points.length > 4) lastTrace = trace;
+    trace = { onsetId: frame.onsetId, points: [], startedAt: frame.time };
+  }
+  trace.points.push({
+    t: frame.onsetAge,
+    abs: frame.time,
+    raw: frame.f0,
+    clarity: frame.clarity,
+    rms: frame.rms,
+    reported: reading.frequency,
+    status: reading.status,
+  });
+  if (trace.points.length > 600) trace.points.shift();
+  trace.mode = MODES.find((m) => m.id === settings.mode)?.label ?? settings.mode;
+  trace.fit = estimator.fitInfo();
+  trace.noteHz = traceReference(trace);
+}
+
+/** Cents are measured against the note the pluck belongs to. */
+function traceReference(current) {
+  const target = targetHz();
+  if (target) return target;
+  const last = [...current.points].reverse().find((p) => p.reported);
+  if (!last) return null;
+  const semitones = Math.round(12 * Math.log2(last.reported / settings.reference));
+  return settings.reference * Math.pow(2, semitones / 12);
+}
+
+function drawTrace() {
+  const current = (trace && trace.points.length > 3) ? trace : lastTrace;
+  if (!current) {
+    traceChart.innerHTML = renderTrace({ points: [], noteHz: null }).svg;
+    traceStats.innerHTML = '';
+    traceScales = null;
+    return;
+  }
+
+  const fit = current.fit && current.points.length
+    ? { ...current.fit, originT: current.fit.origin - current.points[0].abs + current.points[0].t }
+    : null;
+  const { svg, scales } = renderTrace({ ...current, fit });
+  traceChart.innerHTML = svg;
+  traceScales = scales ? { ...scales, points: current.points } : null;
+
+  const midi = Math.round(12 * Math.log2(current.noteHz / settings.reference)) + 69;
+  const rows = [
+    ['Note', `${NOTE_NAMES[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1} · ${current.noteHz.toFixed(2)} Hz`],
+    ['Mode', current.mode],
+    ['Length', `${current.points[current.points.length - 1].t.toFixed(1)} s`],
+  ];
+  if (fit) {
+    rows.push(['Pluck glide', `${fit.amplitude >= 0 ? '+' : ''}${fit.amplitude.toFixed(1)} cents`]);
+    rows.push(['Decay τ', `${fit.theta.toFixed(2)} s`]);
+    rows.push(['Fit confidence', `${Math.round(fit.trust * 100)}%`]);
+    if (fit.partial) rows.push(['Partial tracked', `${fit.partial} · B = ${fit.B.toExponential(1)}`]);
+  }
+  traceStats.innerHTML = rows
+    .map(([term, value]) => `<dt>${term}</dt><dd>${value}</dd>`)
+    .join('');
+}
+
+function onTracePointer(event) {
+  if (!traceScales) return;
+  const box = traceChart.getBoundingClientRect();
+  const t = ((event.clientX - box.left) / box.width) * 360;
+  const seconds = traceScales.duration * ((t - 40) / (350 - 40));
+  let nearest = null;
+  for (const p of traceScales.points) {
+    if (!nearest || Math.abs(p.t - seconds) < Math.abs(nearest.t - seconds)) nearest = p;
+  }
+  if (!nearest) return;
+  const value = nearest.reported || nearest.raw;
+  traceReadout.textContent = value
+    ? `${nearest.t.toFixed(2)} s · ${(1200 * Math.log2(value / traceScales.noteHz)).toFixed(1)} cents · ${value.toFixed(2)} Hz`
+    : `${nearest.t.toFixed(2)} s · no pitch`;
+}
+
+function saveRecording() {
+  if (!engine) return;
+  const samples = engine.snapshot(15);
+  const blob = new Blob([encodeWav(samples, engine.sampleRate)], { type: 'audio/wav' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const string = STRINGS.find((s) => s.id === settings.string);
+  link.download = `tunedup-${string && string.midi !== null ? string.id : 'note'}-${stamp}.wav`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function encodeWav(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const text = (offset, string) => {
+    for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i));
+  };
+  text(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  text(8, 'WAVE');
+  text(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  text(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) {
+    const v = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(44 + i * 2, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+  }
+  return buffer;
 }
 
 /* -------------------------------------------------------------- controls */

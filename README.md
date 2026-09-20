@@ -64,6 +64,23 @@ studio     In tune    −14 cents  −14 cents      ← true answer, held from 2
 strings, plus a peg-turn test that checks the reading still tracks a string
 being tuned in real time.
 
+## The trace view
+
+**Trace** (under the Start button) plots the last pluck: every frame the pitch
+detector produced as recessive dots, the reading the tuner actually showed as a
+line, and the fitted decay curve with the pitch it extrapolates to. A signal-level
+strip shares the time axis below. Touch or hover anywhere on it for the value at
+that instant.
+
+It is the fastest way to see *why* a mode did something — a reading that drifts,
+a fit that over-extrapolates, or a string that stopped being heard are all
+obvious in the plot and invisible in the number.
+
+**Save recording (WAV)** writes the last 15 seconds of audio as the tuner heard
+it. See `samples/README.md` for replaying recordings through every mode with
+`tools/analyse-wav.mjs` — that replay is how the wrong-turn bug in the phase
+unwrapper was found, on the second pluck of a still-ringing string.
+
 ## Target string lock
 
 Selecting a string (rather than `Auto`) tells the tuner what you are aiming at.
@@ -109,8 +126,9 @@ Check the detector against synthetic tones, and the modes against synthetic
 guitar plucks:
 
 ```sh
-node tools/test-pitch.mjs
-node tools/simulate-guitar.mjs
+node tools/test-pitch.mjs                                   # detector vs synthetic tones
+node tools/simulate-guitar.mjs                              # modes vs synthetic plucks
+node tools/analyse-wav.mjs samples/e2.wav --string e2       # modes vs a real recording
 ```
 
 Regenerate the app icons after changing `tools/make-icons.py`:
@@ -139,4 +157,6 @@ Bump `CACHE` in `sw.js` when shipping changes so installed copies pick them up.
 | `capture-worklet.js` | AudioWorklet feeding contiguous audio to the engine |
 | `pitch.js` | MPM pitch detection and spectrum helpers |
 | `sw.js`, `manifest.webmanifest` | PWA shell and offline cache |
-| `tools/` | Icon generator, detector test |
+| `trace.js` | The trace chart (shared by the app and the replay tool) |
+| `tools/` | Icon generator, detector test, pluck simulator, WAV replay |
+| `samples/` | Real recordings to test against |

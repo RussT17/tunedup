@@ -51,6 +51,7 @@ export const STRINGS = [
 ];
 
 const ATTACK_SKIP = 0.25;        // seconds of pluck ignored by sustain/strobe
+const MAX_CENTS_PER_SECOND = 400;   // ~25x faster than anyone turns a peg
 const MAX_TARGET_CENTS = 300;    // reject readings this far from a chosen string
 
 const ORDINALS = ['1st', '2nd', '3rd', '4th', '5th', '6th'];
@@ -94,9 +95,24 @@ class Estimator {
   }
 
   publish(frame, frequency, detail = '', settled = true) {
+    // A ringing string cannot move hundreds of cents between two 40 ms ticks.
+    // Anything that fast is the estimator coming apart as the note dies, so
+    // hold the last good reading instead of showing the wreckage.
+    if (this.settled && frame.onsetId === this.guardOnsetId) {
+      const elapsed = Math.max(0.02, frame.time - this.settledAt);
+      if (Math.abs(cents(frequency, this.settled)) / elapsed > MAX_CENTS_PER_SECOND) {
+        return this.hold(frame, 'holding');
+      }
+    }
+    this.guardOnsetId = frame.onsetId;
     this.settled = frequency;
     this.settledAt = frame.time;
     return { frequency, status: 'live', detail, settled };
+  }
+
+  /** What the mode is currently fitting, for the trace view. Null when it fits nothing. */
+  fitInfo() {
+    return null;
   }
 }
 
@@ -233,6 +249,11 @@ class PredictEstimator extends Estimator {
     return best;
   }
 
+  fitInfo() {
+    const fit = this.solve();
+    return fit ? { ...fit, anchor: this.anchor, origin: this.origin } : null;
+  }
+
   update(frame) {
     if (frame.onsetId !== this.onsetId) {
       this.onsetId = frame.onsetId;
@@ -273,6 +294,9 @@ class StrobeEstimator extends Estimator {
     this.lock = null;
     this.frames = [];
     this.scratch = null;
+    this.lastOffset = null;
+    this.peakDemod = 0;
+    this.resyncs = 0;
   }
 
   /** Pick the partial with the best signal, and measure the string's inharmonicity. */
@@ -345,27 +369,40 @@ class StrobeEstimator extends Estimator {
     return { re, im, amplitude: (2 * Math.hypot(re, im)) / length };
   }
 
-  /** Unwrap the phase slope against progressively longer baselines. */
-  measureOffset(coarseHz) {
+  /** Phase slope between the newest frame and one `baseline` seconds back. */
+  slopeAt(baseline, priorHz) {
     const { sampleRate } = this.ctx;
     const latest = this.frames[this.frames.length - 1];
-    let offset = coarseHz;
-    let used = 0;
-    for (const baseline of [0.08, 0.3]) {
-      const wanted = latest.sample - baseline * sampleRate;
-      let previous = null;
-      for (let i = this.frames.length - 2; i >= 0; i--) {
-        if (this.frames[i].sample <= wanted) { previous = this.frames[i]; break; }
-      }
-      if (!previous) break;
-      const dt = (latest.sample - previous.sample) / sampleRate;
-      const dPhase = Math.atan2(latest.im, latest.re) - Math.atan2(previous.im, previous.re);
-      const predicted = 2 * Math.PI * offset * dt;
-      const turns = Math.round((predicted - dPhase) / (2 * Math.PI));
-      offset = (dPhase + 2 * Math.PI * turns) / (2 * Math.PI * dt);
-      used = dt;
+    const wanted = latest.sample - baseline * sampleRate;
+    let previous = null;
+    for (let i = this.frames.length - 2; i >= 0; i--) {
+      if (this.frames[i].sample <= wanted) { previous = this.frames[i]; break; }
     }
-    return used ? offset : null;
+    if (!previous) return null;
+    const dt = (latest.sample - previous.sample) / sampleRate;
+    const dPhase = Math.atan2(latest.im, latest.re) - Math.atan2(previous.im, previous.re);
+    // The slope is only known modulo one turn per dt, so take the value nearest
+    // the prior. A prior that is wrong by more than half a turn lands on the
+    // wrong one and is then wrong by a constant — hence the cross-check below.
+    const turns = Math.round((2 * Math.PI * priorHz * dt - dPhase) / (2 * Math.PI));
+    return (dPhase + 2 * Math.PI * turns) / (2 * Math.PI * dt);
+  }
+
+  /**
+   * Unwrap against progressively longer baselines. The short baseline is the
+   * median of several overlapping pairs: averaging its noise down is what makes
+   * the long baseline's unwrap safe.
+   */
+  measureOffset(priorHz) {
+    const short = [];
+    for (const baseline of [0.06, 0.08, 0.1, 0.14]) {
+      const value = this.slopeAt(baseline, priorHz);
+      if (value !== null) short.push(value);
+    }
+    if (!short.length) return null;
+    const coarse = median(short);
+    const refined = this.slopeAt(0.3, coarse);
+    return refined === null ? coarse : refined;
   }
 
   update(frame) {
@@ -374,6 +411,8 @@ class StrobeEstimator extends Estimator {
       this.onsetId = frame.onsetId;
       this.lock = null;
       this.frames.length = 0;
+      this.lastOffset = null;
+      this.peakDemod = 0;
       this.onNewNote();
     }
     if (frame.onsetAge === null) return this.hold(frame);
@@ -396,20 +435,51 @@ class StrobeEstimator extends Estimator {
     const length = Math.min(Math.max(periods, Math.round(sampleRate * 0.15)), 1 << 14);
     const z = this.demodulate(frame.sample, length, this.lock.reference);
     if (!z) return this.hold(frame);
+    this.peakDemod = Math.max(this.peakDemod, z.amplitude);
     this.frames.push({ sample: frame.sample, re: z.re, im: z.im, amplitude: z.amplitude });
     while (this.frames.length > 80) this.frames.shift();
+
+    // Once the partial sinks towards the noise the phase is just noise too, and
+    // unwrapping it produces wild jumps. Stop rather than jitter.
+    if (z.amplitude < Math.max(frame.noiseFloor * 1.5, this.peakDemod * 0.004)) {
+      return this.hold(frame, 'faded');
+    }
 
     if (frame.onsetAge < ATTACK_SKIP && !this.trackThroughAttack) {
       return { ...this.hold(frame), status: 'settling', detail: 'settling' };
     }
 
-    // Coarse prior for unwrapping: whatever MPM currently thinks, mapped onto
-    // the tracked partial.
+    // Prior for unwrapping. The previous measurement is far steadier than a
+    // fresh MPM estimate, which is the first thing to fall apart in noise;
+    // MPM only seeds the very first measurement after a lock.
     const coarse = frame.f0
       ? frame.f0 * this.lock.partial * stretch(this.lock.partial, this.lock.B) - this.lock.reference
       : 0;
-    const offset = this.measureOffset(coarse);
+    const offset = this.measureOffset(this.lastOffset === null ? coarse : this.lastOffset);
     if (offset === null) return this.hold(frame);
+
+    // Cross-check the phase track against the pitch detector. They disagree by
+    // a few cents routinely; a disagreement this large means the unwrapper is a
+    // whole turn out, which would otherwise read as a confident wrong answer.
+    // The ambiguity at the long baseline is exactly 1/0.3 s = 3.3 Hz, so a
+    // disagreement approaching half of that is a wrong turn rather than
+    // ordinary estimator noise. Measured in Hz, not cents: the size of a wrong
+    // turn is fixed in Hz and shrinks in cents as the partial rises.
+    if (frame.f0 && frame.clarity > 0.75 && Math.abs(offset - coarse) > 1.4) {
+      this.lastOffset = coarse;
+      this.resyncs = (this.resyncs || 0) + 1;
+      if (this.resyncs > 5) {
+        // Persistent disagreement means the lock itself is wrong — often a
+        // re-pluck beating against the note still ringing. Start over.
+        this.lock = null;
+        this.frames.length = 0;
+        this.lastOffset = null;
+        this.resyncs = 0;
+      }
+      return this.hold(frame, 'resyncing');
+    }
+    this.resyncs = 0;
+    this.lastOffset = offset;
 
     const partialHz = this.lock.reference + offset;
     const frequency = partialHz / (this.lock.partial * stretch(this.lock.partial, this.lock.B));
@@ -434,6 +504,11 @@ class StudioEstimator extends StrobeEstimator {
 
   onNewNote() {
     this.predictor = new PredictEstimator(this.ctx);
+  }
+
+  fitInfo() {
+    const info = this.predictor ? this.predictor.fitInfo() : null;
+    return info && this.lock ? { ...info, partial: this.lock.partial, B: this.lock.B } : info;
   }
 
   onMeasurement(frame, frequency) {

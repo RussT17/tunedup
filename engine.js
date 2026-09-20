@@ -4,7 +4,7 @@ import { PitchDetector } from './pitch.js';
 // audio, tracks the noise floor and note onsets, and runs one MPM pitch
 // estimate per tick. Estimators consume the resulting frames.
 
-const RING_BITS = 17;            // 131072 samples — 2.7 s at 48 kHz
+const RING_BITS = 20;            // ~1M samples — 21 s at 48 kHz, enough to export a pluck
 const WINDOW_SIZE = 8192;        // ~170 ms, enough periods for a low B string
 const ENVELOPE_SECONDS = 0.025;
 
@@ -37,6 +37,15 @@ export class Engine {
     if (start < 0 || endSample > this.written || this.written - start > this.ring.length) return false;
     for (let i = 0; i < target.length; i++) target[i] = this.ring[(start + i) & this.ringMask];
     return true;
+  }
+
+  /** The most recent `seconds` of audio, for exporting a recording. */
+  snapshot(seconds) {
+    const count = Math.min(Math.round(seconds * this.sampleRate), this.ring.length, this.written);
+    const out = new Float32Array(count);
+    const start = this.written - count;
+    for (let i = 0; i < count; i++) out[i] = this.ring[(start + i) & this.ringMask];
+    return out;
   }
 
   rms(sampleCount, endSample = this.written) {

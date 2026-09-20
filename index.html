@@ -64,11 +64,26 @@
     </div>
 
     <p id="modeBlurb" class="blurb"></p>
-    <button id="startBtn" class="start" type="button">Start tuning</button>
+    <div class="actions">
+      <button id="startBtn" class="start" type="button">Start tuning</button>
+      <button id="traceBtn" class="link" type="button">Trace</button>
+    </div>
     <p id="errorText" class="error" hidden></p>
   </footer>
 
 </main>
+
+<section id="tracePanel" class="panel" hidden>
+  <header class="panel-top">
+    <h2 class="panel-title">Last pluck</h2>
+    <button id="traceClose" class="link" type="button">Close</button>
+  </header>
+  <svg id="traceChart" class="trace-chart" viewBox="0 0 360 262" role="img" aria-label="Pitch over time since the pluck"></svg>
+  <p id="traceReadout" class="trace-readout"></p>
+  <dl id="traceStats" class="trace-stats"></dl>
+  <button id="saveBtn" class="save" type="button">Save recording (WAV)</button>
+  <p class="panel-note">Saves the last 15 seconds of audio. Send me the file and I can replay it through every mode.</p>
+</section>
 
 <script type="module" src="./app.js"></script>
 </body>
