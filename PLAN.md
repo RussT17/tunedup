@@ -68,6 +68,17 @@ finding out.
   −0.2). The trust blend lets the fit run too far.
 - B string: strobe and the MPM modes disagree by ~3 cents consistently, in one
   direction. Plain steel, high inharmonicity — suspect the partial correction.
+- Three accuracy ideas raised but never built, each a candidate for the
+  bake-off rather than an afterthought: a **joint harmonic fit** that solves f0
+  and B together across all partials instead of tracking one; an **adaptive
+  analysis window** so low strings get more periods and high strings get faster
+  response, instead of one fixed 170 ms for everything; and **envelope
+  compensation** inside the window, since a note decays while it is being
+  analysed and that biases the correlation — worst on exactly the hard-pluck
+  case that is worst today.
+- Guard against octave errors explicitly. The A2 rumble bug was one, and it
+  surfaced as a confident wrong answer rather than a visible failure. A ringing
+  string does not change octave mid-note, so that is checkable.
 - Then run the bake-off and **pick one default**. Keep the rest as code behind
   the debug door, or delete them; do not keep five modes in a shipped app.
 
@@ -87,6 +98,9 @@ still the weakest: *"it was hard for me to tell."*
   all currently guesses. Tune them against how it feels while actually tuning.
 - A clear "this string is done" moment, and something that tracks progress
   through all six strings without becoming a checklist app.
+- Coach the pluck. A softer pluck has less glide to correct, so the app knowing
+  that and saying so — once, quietly, when it sees a heavy one — is an accuracy
+  improvement disguised as a UI detail.
 
 **Done when** you can tune the guitar without thinking about the app.
 

@@ -15,6 +15,21 @@ rather than deleting them, so the reasoning stays visible.
 - [ ] **B string: Strobe and the MPM modes disagree by ~3 cents**, consistently
       and in one direction. B3 is plain steel with high inharmonicity, so the
       suspect is the partial correction, the B estimate, or both.
+- [ ] **Adaptive analysis window.** The window is a fixed 8192 samples (~170 ms)
+      for every note. That is ~14 periods of a low E and ~57 of a high E — the
+      low strings are the ones short of evidence and the high strings are paying
+      for resolution they do not need. Scale the window with the detected or
+      target frequency: more periods low, faster response high.
+- [ ] **Envelope compensation inside the window.** A note decays *during* the
+      170 ms being analysed, so the autocorrelation compares loud early samples
+      against quieter later ones and is biased by it. Dividing out the measured
+      envelope before correlating removes a bias that is largest on exactly the
+      case that is worst today — a hard pluck on a fast-decaying string.
+- [ ] **Octave errors as a named failure class.** The A2 rumble bug was one, and
+      it read as a confident wrong answer rather than a visible failure. Defences
+      so far: the room profile, the target lock, and MPM's first-peak rule. Worth
+      adding a continuity check — a ringing string does not change octave
+      mid-note, so a reading that jumps one is wrong by construction.
 - [ ] Decide what to do about the first second after a pluck. Every mode is
       several cents sharp there because the string is; "settling" is honest but
       the user still wants a number.
