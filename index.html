@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>TunedUp</title>
+<meta name="description" content="A simple, accurate chromatic instrument tuner that runs in your browser." />
+<meta name="theme-color" content="#0b0d10" />
+<meta name="color-scheme" content="dark" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="TunedUp" />
+<link rel="manifest" href="./manifest.webmanifest" />
+<link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+<main id="app" class="state-idle">
+
+  <header class="topbar">
+    <div class="wordmark">TunedUp</div>
+    <button id="refBtn" class="ref" type="button" aria-label="Reference pitch">A<span>4</span> <b id="refValue">440</b> Hz</button>
+  </header>
+
+  <div class="stage">
+  <section class="readout" aria-live="polite">
+    <div class="note">
+      <span id="noteName" class="note-name"></span><span id="noteOctave" class="note-octave"></span>
+    </div>
+    <div id="centsText" class="cents">Tap to start</div>
+  </section>
+
+  <section class="gauge-wrap">
+    <svg class="gauge" viewBox="0 0 300 186" role="img" aria-label="Tuning meter">
+      <g id="ticks"></g>
+      <path class="arc" d="M 39.1 109.6 A 118 118 0 0 1 260.9 109.6" />
+      <g id="needle" class="needle">
+        <line x1="150" y1="150" x2="150" y2="54" />
+        <circle cx="150" cy="150" r="7" />
+      </g>
+      <circle id="target" class="target" cx="150" cy="22" r="4" />
+    </svg>
+    <div id="hint" class="hint">Play a single note</div>
+  </section>
+  </div>
+
+  <footer class="footer">
+    <div id="freqText" class="freq"></div>
+    <button id="startBtn" class="start" type="button">Start tuning</button>
+    <p id="errorText" class="error" hidden></p>
+  </footer>
+
+</main>
+
+<div id="refSheet" class="sheet" hidden>
+  <div class="sheet-card" role="dialog" aria-label="Reference pitch">
+    <p class="sheet-title">Reference pitch — A4</p>
+    <div class="stepper">
+      <button id="refDown" type="button" aria-label="Lower reference pitch">−</button>
+      <span id="refBig">440</span><i class="sheet-unit">Hz</i>
+      <button id="refUp" type="button" aria-label="Raise reference pitch">+</button>
+    </div>
+    <button id="refDone" class="sheet-done" type="button">Done</button>
+  </div>
+</div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
