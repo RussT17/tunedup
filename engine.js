@@ -9,8 +9,14 @@ const WINDOW_SIZE = 8192;        // ~170 ms, enough periods for a low B string
 const ENVELOPE_SECONDS = 0.025;
 const TAPE_SECONDS = 18;         // raw audio kept for export, with headroom
                                  // so a 15 s capture cannot be overwritten mid-save
-const HIGHPASS_HZ = 25;          // handling rumble and DC
+// Rooms are full of low-frequency energy — HVAC, traffic, the fridge. It sits
+// between 40 and 70 Hz, below every guitar string, and a gentle filter leaves
+// enough of it to fool a pitch detector into an octave error. Hence a steep
+// fourth-order slope with a cutoff just under the lowest string.
+const HIGHPASS_HZ = 70;
+const HIGHPASS_STAGES = 2;       // two biquads = 24 dB/octave
 const LOWPASS_HZ = 3500;         // hiss above anything musical
+const SEARCH_MARGIN_CENTS = 400; // how far either side of a chosen string to look
 
 /** RBJ biquad, held as persistent state so blocks join without a transient. */
 function biquad(type, frequency, sampleRate, q = Math.SQRT1_2) {
@@ -48,8 +54,8 @@ export class Engine {
     this.written = 0;
     this.tape = new Float32Array(Math.round(TAPE_SECONDS * sampleRate));
     this.taped = 0;
-    this.highpass = biquad('highpass', HIGHPASS_HZ, sampleRate);
     this.lowpass = biquad('lowpass', LOWPASS_HZ, sampleRate);
+    this.setTarget(null);
 
     this.detector = new PitchDetector(WINDOW_SIZE);
     this.window = new Float32Array(WINDOW_SIZE);
@@ -57,8 +63,27 @@ export class Engine {
     this.noiseFloor = 0.002;
     this.onsetSample = -1;
     this.aboveGateSince = -1;
+    this.quietSince = -1;
     this.onsetId = 0;
     this.peakRms = 0;
+  }
+
+  /**
+   * Point the front end at a known string, or at the whole guitar range. With a
+   * target the high-pass can sit far higher and the pitch search shrinks to a
+   * few semitones, which is what makes a quiet string on a noisy floor readable.
+   */
+  setTarget(targetHz) {
+    const cutoff = targetHz
+      ? Math.min(400, Math.max(45, targetHz * 0.7))
+      : HIGHPASS_HZ;
+    this.highpass = [];
+    for (let i = 0; i < HIGHPASS_STAGES; i++) {
+      this.highpass.push(biquad('highpass', cutoff, this.sampleRate));
+    }
+    const margin = Math.pow(2, SEARCH_MARGIN_CENTS / 1200);
+    this.minFreq = targetHz ? targetHz / margin : 65;
+    this.maxFreq = targetHz ? targetHz * margin : 1400;
   }
 
   push(block) {
@@ -66,7 +91,9 @@ export class Engine {
     for (let i = 0; i < block.length; i++) {
       const raw = block[i];
       tape[(this.taped + i) % tape.length] = raw;
-      ring[(this.written + i) & ringMask] = step(this.lowpass, step(this.highpass, raw));
+      let filtered = raw;
+      for (const stage of this.highpass) filtered = step(stage, filtered);
+      ring[(this.written + i) & ringMask] = step(this.lowpass, filtered);
     }
     this.written += block.length;
     this.taped += block.length;
@@ -119,12 +146,27 @@ export class Engine {
     const gate = Math.max(this.noiseFloor * 3.5, 0.0012);
     this.aboveGateSince = rms > gate ? (this.aboveGateSince < 0 ? this.written : this.aboveGateSince) : -1;
 
-    const isOnset = rms > gate * 1.5 && rms > previous * 2 &&
+    // Pitch first: whether the detector can still hear a note is part of
+    // deciding whether the note is over.
+    let frequency = 0;
+    let clarity = 0;
+    if (this.read(this.window)) {
+      const result = this.detector.detect(this.window, sr, {
+        minRms: Math.max(this.noiseFloor * 2, 0.0008),
+        minFreq: this.minFreq,
+        maxFreq: this.maxFreq,
+      });
+      frequency = result.frequency;
+      clarity = result.clarity;
+    }
+
+    const isOnset = rms > gate * 1.5 && rms > previous * 1.7 &&
       (!sounding || (this.written - this.onsetSample) / sr > 0.15);
 
     if (isOnset) {
       this.onsetSample = this.written - envelope;
       this.peakRms = rms;
+      this.quietSince = -1;
       this.onsetId++;
     } else if (!sounding && this.aboveGateSince >= 0 &&
                (this.written - this.aboveGateSince) / sr > 0.4) {
@@ -133,20 +175,23 @@ export class Engine {
       // rather than never showing a reading.
       this.onsetSample = this.aboveGateSince;
       this.peakRms = Math.max(this.peakRms, rms);
+      this.quietSince = -1;
       this.onsetId++;
     } else if (sounding) {
       if (rms > this.peakRms) this.peakRms = rms;
-      // A note is over once it falls back into the noise, not at a fixed level:
-      // an unplugged electric decays a long way below a fixed threshold.
-      if (rms < Math.max(this.noiseFloor * 2.5, this.peakRms * 0.015)) this.onsetSample = -1;
-    }
-
-    let frequency = 0;
-    let clarity = 0;
-    if (this.read(this.window)) {
-      const result = this.detector.detect(this.window, sr, Math.max(this.noiseFloor * 2, 0.0008));
-      frequency = result.frequency;
-      clarity = result.clarity;
+      // A note ends when it is both too quiet to measure and no longer
+      // periodic, and stays that way. Ending it on level alone cut soft
+      // strings off while the detector could still read them perfectly well.
+      const quiet = rms < Math.max(this.noiseFloor * 1.8, this.peakRms * 0.008);
+      if (quiet && clarity < 0.6) {
+        if (this.quietSince < 0) this.quietSince = this.written;
+        if ((this.written - this.quietSince) / sr > 0.25) {
+          this.onsetSample = -1;
+          this.quietSince = -1;
+        }
+      } else {
+        this.quietSince = -1;
+      }
     }
 
     return {

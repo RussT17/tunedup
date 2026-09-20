@@ -82,6 +82,22 @@ finishes, so a recording session is tap-play-repeat with no timing by hand. See
 every mode with `tools/analyse-wav.mjs` — that replay is how the wrong-turn bug
 in the phase unwrapper was found, on the second pluck of a still-ringing string.
 
+## Frequency range, and why it is not the whole piano
+
+The front end high-passes at 70 Hz with a fourth-order slope, and the pitch
+search runs from 65 Hz up. That is a deliberate narrowing to the guitar's range,
+forced by real recordings: rooms are full of energy between 40 and 70 Hz — HVAC,
+traffic, a fridge — and in `samples/room-tone.wav` a 58 Hz rumble is the loudest
+thing present. On a softly plucked A string it was *louder than the note*, and a
+gentle 25 Hz filter left enough of it that the detector locked onto 55 Hz, half
+of A2, because that period fits both the rumble and the string. Tuning anything
+below a guitar's low E means lowering `HIGHPASS_HZ` in `engine.js` and accepting
+that noise back.
+
+Selecting a target string narrows both further — the high-pass moves to 70% of
+the target and the search to ±400 cents around it — which is what makes a quiet
+low string readable on a noisy floor.
+
 ## Target string lock
 
 Selecting a string (rather than `Auto`) tells the tuner what you are aiming at.

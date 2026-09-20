@@ -6,8 +6,8 @@
 // n(t) sit at multiples of the period; picking the *first* peak that is nearly
 // as tall as the tallest one is what keeps us off the octave above/below.
 
-const MIN_FREQ = 27.5;   // A0
-const MAX_FREQ = 2100;   // ~C7
+const DEFAULT_MIN_FREQ = 65;    // below the lowest guitar string; room rumble lives here
+const DEFAULT_MAX_FREQ = 1400;
 const CLARITY_THRESHOLD = 0.55;
 const PEAK_RATIO = 0.9;
 
@@ -59,7 +59,12 @@ export class PitchDetector {
    * @returns {{frequency:number, clarity:number, rms:number}} — frequency is 0
    * when nothing convincing was found.
    */
-  detect(input, sampleRate, minRms = 0.004) {
+  detect(input, sampleRate, options = {}) {
+    const {
+      minRms = 0.004,
+      minFreq = DEFAULT_MIN_FREQ,
+      maxFreq = DEFAULT_MAX_FREQ,
+    } = typeof options === 'number' ? { minRms: options } : options;
     const n = this.size;
     const x = this.work;
 
@@ -91,8 +96,8 @@ export class PitchDetector {
     fft(this.re, this.im, true);
     const scale = 1 / m;
 
-    const minLag = Math.max(2, Math.floor(sampleRate / MAX_FREQ));
-    const maxLag = Math.min(n - 2, Math.ceil(sampleRate / MIN_FREQ));
+    const minLag = Math.max(2, Math.floor(sampleRate / maxFreq));
+    const maxLag = Math.min(n - 2, Math.ceil(sampleRate / minFreq));
     const nsdf = this.nsdf;
     const total = this.cumPower[n];
     for (let t = minLag; t <= maxLag; t++) {
@@ -136,7 +141,7 @@ export class PitchDetector {
     const shift = denom !== 0 ? (y2 - y0) / denom : 0;
     const lag = chosen + Math.max(-1, Math.min(1, shift));
     const frequency = sampleRate / lag;
-    if (frequency < MIN_FREQ || frequency > MAX_FREQ) return { frequency: 0, clarity: 0, rms };
+    if (frequency < minFreq || frequency > maxFreq) return { frequency: 0, clarity: 0, rms };
 
     return { frequency, clarity: Math.min(1, y1), rms };
   }

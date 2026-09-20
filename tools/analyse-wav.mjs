@@ -55,6 +55,7 @@ function readWav(file) {
 
 function run(modeId, samples, sampleRate, target) {
   const engine = new Engine(sampleRate);
+  engine.setTarget(target);
   const estimator = createEstimator(modeId, { sampleRate, engine, targetHz: () => target });
   const tick = Math.round(sampleRate * 0.04);
   let next = tick;

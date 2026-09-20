@@ -60,6 +60,7 @@ function pluck({ f0, seconds, glideCents = 15, tau = 2.2, B = 8e-5, level = 0.25
 
 function run(modeId, signal, targetHz) {
   const engine = new Engine(SR);
+  engine.setTarget(targetHz);
   const estimator = createEstimator(modeId, {
     sampleRate: SR,
     engine,

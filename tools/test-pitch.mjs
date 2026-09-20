@@ -30,7 +30,9 @@ for (const freq of [41.2, 65.41, 82.41, 110, 146.83, 196, 246.94, 329.63, 440, 5
   for (const harmonics of [1, 6, 14]) {
     for (const skip of [false, true]) {
       if (skip && harmonics === 1) continue;
-      const { frequency } = detector.detect(tone(freq, harmonics, 0.01, skip), SR);
+      // Explicit range: the app defaults to the guitar band, but the detector
+      // itself must stay correct wherever it is pointed.
+      const { frequency } = detector.detect(tone(freq, harmonics, 0.01, skip), SR, { minFreq: 30 });
       const error = frequency ? cents(frequency, freq) : NaN;
       const ok = Math.abs(error) < TOLERANCE_CENTS;
       if (!ok) failures++;
@@ -43,9 +45,9 @@ for (const freq of [41.2, 65.41, 82.41, 110, 146.83, 196, 246.94, 329.63, 440, 5
   }
 }
 
-const silence = detector.detect(new Float32Array(N), SR);
+const silence = detector.detect(new Float32Array(N), SR, { minFreq: 30 });
 const noise = new Float32Array(N).map(() => 0.1 * (random() * 2 - 1));
-const noiseResult = detector.detect(noise, SR);
+const noiseResult = detector.detect(noise, SR, { minFreq: 30 });
 for (const [label, result] of [['silence', silence], ['white noise', noiseResult]]) {
   const ok = result.frequency === 0;
   if (!ok) failures++;

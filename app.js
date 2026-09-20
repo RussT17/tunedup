@@ -226,6 +226,7 @@ function fail(message) {
 
 function buildEstimator() {
   if (!engine) return;
+  engine.setTarget(targetHz());
   estimator = createEstimator(settings.mode, {
     sampleRate: engine.sampleRate,
     engine,
