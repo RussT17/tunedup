@@ -167,6 +167,22 @@ finding out.
   compensation** inside the window, since a note decays while it is being
   analysed and that biases the correlation — worst on exactly the hard-pluck
   case that is worst today.
+**The escape hatch — taken.** The criterion below was met and the hatch was
+used; the attempts and the physics are recorded in `TODO.md`. The app now
+coaches the pluck instead of modelling the hard one. Original reasoning:
+
+**The escape hatch, decided in advance.** A hard pluck is a harder question
+than a soft one — it carries three times the glide and the honest answer is
+further away. If the remaining candidates do not close it without constants
+tuned to one guitar, the right move is not to keep fitting: it is to support
+the moderate pluck properly and *say so*. The app already measures the glide of
+each pluck, so it can notice a heavy one and coach it in one quiet line rather
+than silently reporting a worse number. **Criterion for taking it:** if after
+envelope compensation and the joint harmonic fit the hard-pluck error is still
+above 5 cents while normal plucks are inside 2, stop, and spend the effort on
+Phase 2 instead. Taking this hatch is a success, not a failure — it is refusing
+to overfit.
+
 - Guard against octave errors explicitly. The A2 rumble bug was one, and it
   surfaced as a confident wrong answer rather than a visible failure. A ringing
   string does not change octave mid-note, so that is checkable.

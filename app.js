@@ -7,6 +7,10 @@ const TICK_MS = 40;
 const RECORD_SECONDS = 15;
 const RECORD_PREROLL = 0.5;     // a moment before the tap, in case it came late
 const IN_TUNE_CENTS = 3;
+// A pluck this sharp at the attack has a glide that takes seconds to finish.
+// The reading is worth less and the honest thing is to say so rather than to
+// keep fitting the hard case.
+const HARD_PLUCK_CENTS = 15;
 const MAX_DEFLECTION = 70;      // degrees at ±50 cents
 
 const app = document.getElementById('app');
@@ -307,7 +311,13 @@ function render(reading) {
     `${reading.frequency.toFixed(1)} Hz`,
     reading.detail,
   ].filter(Boolean).join(' · ');
-  hintEl.textContent = settling ? 'holding the pluck…' : provisional ? 'settling…' : '';
+  hintEl.textContent = settling
+    ? 'holding the pluck…'
+    : provisional
+      ? 'settling…'
+      : reading.glide > HARD_PLUCK_CENTS
+        ? 'plucked hard — softer settles sooner'
+        : '';
 
   app.classList.add('has-note');
   app.classList.toggle('provisional', provisional);

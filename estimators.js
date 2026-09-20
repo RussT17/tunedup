@@ -112,7 +112,7 @@ class Estimator {
     return this.smoothed;
   }
 
-  publish(frame, frequency, detail = '', settled = true) {
+  publish(frame, frequency, detail = '', settled = true, glide = 0) {
     // A ringing string cannot move hundreds of cents between two 40 ms ticks.
     // Anything that fast is the estimator coming apart as the note dies, so
     // hold the last good reading instead of showing the wreckage.
@@ -125,7 +125,7 @@ class Estimator {
     this.guardOnsetId = frame.onsetId;
     this.settled = frequency;
     this.settledAt = frame.time;
-    return { frequency, status: 'live', detail, settled };
+    return { frequency, status: 'live', detail, settled, glide };
   }
 
   /** What the mode is currently fitting, for the trace view. Null when it fits nothing. */
@@ -194,9 +194,14 @@ class SustainEstimator extends Estimator {
  */
 // Plausible decay times for the glide on a steel string: it follows the square
 // of the amplitude envelope, so roughly half the note's own decay time.
-// Longer candidates were tried and reverted: they let the fit claim a 51-cent
-// glide on a hard low E and extrapolate 16 cents past the truth. A grid that
-// cannot reach an implausible answer is worth more than one that can.
+// Two attempts to do better than this grid were tried and reverted. Longer
+// candidates let the fit claim a 51-cent glide on a hard low E and overshoot by
+// 16. Deriving theta from the measured envelope is right in principle — the
+// glide follows the square of the amplitude, so it should decay in half the
+// note's time constant — but a plucked string's envelope is two-stage, steep
+// while the high partials die and slow thereafter, and every way of fitting it
+// returned a decay too fast and scored worse. A grid that cannot reach an
+// implausible answer beat both.
 const DECAY_CANDIDATES = [0.3, 0.45, 0.6, 0.8, 1.1, 1.5, 2, 2.6];
 const MAX_EXTRAPOLATION_CENTS = 35;
 
@@ -213,7 +218,12 @@ class PredictEstimator extends Estimator {
       this.anchor = frequency;
       this.origin = frame.time;
     }
-    this.points.push({ t: frame.time - this.origin, y: cents(frequency, this.anchor), w: weight });
+    this.points.push({
+      t: frame.time - this.origin,
+      y: cents(frequency, this.anchor),
+      w: weight,
+      level: frame.rms,
+    });
     if (this.points.length > 500) this.points.shift();
   }
 
@@ -299,7 +309,8 @@ class PredictEstimator extends Estimator {
       frame,
       this.smooth(frame, this.anchor * Math.pow(2, fit.reported / 1200)),
       trusted ? `settled · pluck +${fit.amplitude.toFixed(1)}c` : 'still settling',
-      trusted
+      trusted,
+      trusted ? fit.amplitude : 0
     );
   }
 }
@@ -557,7 +568,8 @@ class StudioEstimator extends StrobeEstimator {
       frame,
       this.smooth(frame, this.predictor.anchor * Math.pow(2, fit.reported / 1200)),
       trusted ? `${ordinal} partial · pluck +${fit.amplitude.toFixed(1)}c` : `${ordinal} partial · settling`,
-      trusted
+      trusted,
+      trusted ? fit.amplitude : 0
     );
   }
 }

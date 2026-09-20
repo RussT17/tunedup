@@ -238,7 +238,9 @@ html, body {
 .state-error .start { display: none; }
 
 .state-listening .hint { opacity: 1; }
-.state-listening.has-note .hint { opacity: 0; }
+/* The hint stays visible when it has something to say — a settling note or a
+   pluck heavy enough to be worth mentioning. */
+.state-listening.has-note .hint:empty { opacity: 0; }
 
 .has-note .note-name,
 .has-note .cents { color: var(--fg); }

@@ -92,6 +92,23 @@ rather than deleting them, so the reasoning stays visible.
 
 ## Done
 
+- [x] **Hard plucks: stopped fitting, started coaching.** The measurements are
+      unambiguous. A hard low E really does settle at the same pitch as a soft
+      one — independent measurement converges to −11.6 cents against the soft
+      take's −11.2 — but it takes over three seconds to get there, against
+      under one for a normal pluck. Three attempts to model that failed:
+      a longer decay grid let the fit claim a 51-cent glide and overshoot by
+      16; deriving the decay time from the measured envelope, which is right in
+      principle since the glide follows the square of the amplitude, returned a
+      value three times too fast because a plucked string's envelope is
+      two-stage — 14 dB in the first 1.5 s as the high partials die, then 17 dB
+      over the next four — and every way of fitting it scored worse. Each
+      attempt also degraded the cases that already worked.
+      So: the app measures each pluck's glide anyway, and now says
+      "plucked hard — softer settles sooner" when it exceeds 15 cents. A normal
+      pluck reads inside half a cent; that is the supported case, stated plainly
+      rather than approximated badly.
+
 - [x] Output smoothing on the fitted modes. The fit re-solves every tick and
       each solve moved the number by cents; shown raw it fidgeted. Worst
       frame-to-frame jump on the real samples: Studio 4.6 → 1.7 cents,
