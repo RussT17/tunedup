@@ -63,6 +63,44 @@ badly out of tune — is also the easy case, because 40 cents flat swamps any
 plausible glide. The ambiguity only bites within about 20 cents, which is
 exactly where precision matters more than speed anyway.
 
+## The values, and how they trade against each other
+
+Seven things we want. They conflict, so what matters is how conflicts get
+settled, not the list.
+
+- **Accurate** — the reading is right.
+- **Fast** — it is right *soon*.
+- **Stable** — it does not fidget.
+- **Responsive** — the app visibly notices the note the instant it is played,
+  whether or not it has a reading yet.
+- **Robust** — replays, retunes mid-ring, string changes and random noise are
+  all handled without drama.
+- **Minimalist** — simple, and a pleasure.
+- **Illustrative** — a pitch-over-time plot is worth showing if it is simple,
+  steady and good-looking.
+
+Three of the conflicts have real resolutions rather than compromises:
+
+**Responsive versus Stable is not actually a conflict** — they are different
+channels. Acknowledgement should be instant: the moment a pluck is detected the
+app can show the note name, light up, show the level. The *number* can take its
+time. Conflating them is why the app currently feels both slow and twitchy; the
+fix is to separate them, not to trade one against the other.
+
+**Fast versus Accurate is what the decay fit is for.** The string genuinely is
+sharp for the first second, so a fast reading and a true reading really are
+opposed — unless the app predicts where the string is heading instead of
+waiting. That is the whole argument for the settled-pitch fit, and it is why
+Phase 1 matters more than shaving milliseconds anywhere else.
+
+**When they cannot be reconciled, honest-and-slow beats confident-and-wrong.**
+A reading the app is not sure of gets shown as unsure. It never claims *In tune*
+before it has earned it.
+
+**Minimalist versus Illustrative** is settled by placement, not by cutting: the
+main screen carries a note, a needle and nothing else; the plot lives one tap
+away. A visualisation is allowed on the main screen only if it never twitches.
+
 ## The order is forced, not arbitrary
 
 The sequencing matters more than the list, because three dependencies pin it:
@@ -81,9 +119,11 @@ So: fix the ruler, pick the algorithm, prove it generalises, then strip the
 scaffolding. The cleanup you want is Phase 4 — deliberately last, because it is
 the phase that can only be done once.
 
-## Phase 0 — Trust the ruler
+## Phase 0 — Trust the ruler — **done**
 
-Small, and everything else depends on it.
+`node tools/score.mjs` scores every mode against real samples and a randomised
+sweep, and prints the change against a saved baseline. Truth is ±1 cent with a
+known, uniform bias. What follows is the record of what it was.
 
 - Resolve the A2 and D3 disagreement between `measure-truth.mjs` and the strobe
   estimator. One of them is wrong by 3+ cents and we do not know which.
@@ -96,7 +136,16 @@ Small, and everything else depends on it.
 - One command that scores any change against truth across every sample and the
   sweep, and prints a single number plus what regressed.
 
-**Done when** a single command answers "did that change make it better?"
+**Standing as of the last run** (error at 2 s on the real samples, median /
+p90, and the worst frame-to-frame jump):
+
+```
+  Standard   3.1 / 8.5   jump 0.6c      stable but blunt
+  Sustain    2.4 / 8.6   jump 7.7c
+  Predict    1.6 / 8.6   jump 4.4c      most accurate early, worst tail
+  Strobe     2.5 / 5.5   jump 5.3c
+  Studio     1.9 / 4.0   jump 1.7c   ←  best balance so far
+```
 
 ## Phase 1 — Pick the algorithm
 

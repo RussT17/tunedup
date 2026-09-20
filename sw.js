@@ -1,5 +1,5 @@
 // Bump CACHE whenever the shell changes so clients pick up a new build.
-const CACHE = 'tunedup-v7';
+const CACHE = 'tunedup-v8';
 const SHELL = [
   './',
   './index.html',

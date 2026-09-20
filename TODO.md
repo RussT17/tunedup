@@ -50,10 +50,9 @@ rather than deleting them, so the reasoning stays visible.
       attack skip, the fade gate, the slew limit and the unwrap tolerance should
       each be derived from the noise floor, the sample rate, or the physics,
       or be justified in a comment as to why a constant is right.
-- [ ] **Randomised synthetic sweep as a regression gate.** Vary rumble
-      frequency, inharmonicity, decay time, microphone response and SNR *wider*
-      than one guitar in one room. A change that helps the samples but hurts the
-      sweep is overfitting, and the sweep is what will say so.
+- [x] ~~Randomised synthetic sweep as a regression gate~~ — `tools/sweep.mjs`,
+      40 randomised plucks per run, and `tools/score.mjs` scores the real
+      samples and the sweep together against a saved baseline.
 - [ ] **A second dataset**: another instrument, another room, another phone.
       One guitar is one guitar.
 - [ ] **Instrument selection** (guitar, bass, cello, piano) to narrow the search
@@ -92,6 +91,18 @@ rather than deleting them, so the reasoning stays visible.
   are also the two with the shortest tracking. Unresolved.
 
 ## Done
+
+- [x] Output smoothing on the fitted modes. The fit re-solves every tick and
+      each solve moved the number by cents; shown raw it fidgeted. Worst
+      frame-to-frame jump on the real samples: Studio 4.6 → 1.7 cents,
+      Predict 14.8 → 4.4, at no cost in accuracy.
+- [x] Ground truth is now a characterised instrument: median of several windows
+      that each sit wholly inside the note, ±1 cent, with a known bias of about
+      +0.85 cents that applies equally to every string — so mode *comparisons*,
+      which is what it is for, are unaffected. A cleverer version that fitted
+      and extrapolated the glide was excellent on soft plucks and 20 cents out
+      on hard ones, and was thrown away: a ruler that is sometimes brilliant is
+      not a ruler.
 
 - [x] Room profile replaces the fixed high-pass: each band is judged against
       what that band normally does, so a low note is admitted exactly where a

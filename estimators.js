@@ -52,6 +52,7 @@ export const STRINGS = [
 
 const ATTACK_SKIP = 0.25;        // seconds of pluck ignored by sustain/strobe
 const MAX_CENTS_PER_SECOND = 400;   // ~25x faster than anyone turns a peg
+const SMOOTHING = 0.3;              // share of a fit's move applied per tick
 const MAX_TARGET_CENTS = 300;    // reject readings this far from a chosen string
 
 const ORDINALS = ['1st', '2nd', '3rd', '4th', '5th', '6th'];
@@ -92,6 +93,23 @@ class Estimator {
     if (!this.settled) return { frequency: 0, status: 'idle', detail };
     const fresh = frame.time - this.settledAt < 0.35;
     return { frequency: this.settled, status: fresh ? 'live' : 'held', detail };
+  }
+
+  /**
+   * Smooth the published value. The underlying fit re-solves on every tick and
+   * each solve can move by cents; shown raw that reads as fidgeting, which is
+   * its own kind of wrong even when the average is right. Smoothing trades a
+   * little lag for a number that holds still enough to tune against.
+   */
+  smooth(frame, frequency) {
+    if (!this.smoothed || frame.onsetId !== this.smoothedOnset) {
+      this.smoothedOnset = frame.onsetId;
+      this.smoothed = frequency;
+      return frequency;
+    }
+    const drift = cents(frequency, this.smoothed);
+    this.smoothed *= Math.pow(2, (drift * SMOOTHING) / 1200);
+    return this.smoothed;
   }
 
   publish(frame, frequency, detail = '', settled = true) {
@@ -176,6 +194,9 @@ class SustainEstimator extends Estimator {
  */
 // Plausible decay times for the glide on a steel string: it follows the square
 // of the amplitude envelope, so roughly half the note's own decay time.
+// Longer candidates were tried and reverted: they let the fit claim a 51-cent
+// glide on a hard low E and extrapolate 16 cents past the truth. A grid that
+// cannot reach an implausible answer is worth more than one that can.
 const DECAY_CANDIDATES = [0.3, 0.45, 0.6, 0.8, 1.1, 1.5, 2, 2.6];
 const MAX_EXTRAPOLATION_CENTS = 35;
 
@@ -234,7 +255,10 @@ class PredictEstimator extends Estimator {
     // than trusted or discarded outright.
     const elapsed = points[points.length - 1].t;
     best.progress = 1 - Math.exp(-elapsed / best.theta);
-    const sane = best.amplitude > -1 && best.rms < 3 && points.length >= 8;
+    // A pluck's glide is a few cents to a few tens; a fit claiming more than
+    // that has found something other than a decaying string.
+    const sane = best.amplitude > -1 && best.amplitude < MAX_EXTRAPOLATION_CENTS &&
+      best.rms < 3 && points.length >= 8;
     best.trust = sane
       ? Math.max(0, Math.min(1, (best.progress - 0.15) / 0.5)) *
         Math.max(0, Math.min(1, (span - 0.3) / 0.5))
@@ -273,7 +297,7 @@ class PredictEstimator extends Estimator {
     const trusted = fit.trust > 0.6;
     return this.publish(
       frame,
-      this.anchor * Math.pow(2, fit.reported / 1200),
+      this.smooth(frame, this.anchor * Math.pow(2, fit.reported / 1200)),
       trusted ? `settled · pluck +${fit.amplitude.toFixed(1)}c` : 'still settling',
       trusted
     );
@@ -531,7 +555,7 @@ class StudioEstimator extends StrobeEstimator {
     const trusted = fit.trust > 0.6;
     return this.publish(
       frame,
-      this.predictor.anchor * Math.pow(2, fit.reported / 1200),
+      this.smooth(frame, this.predictor.anchor * Math.pow(2, fit.reported / 1200)),
       trusted ? `${ordinal} partial · pluck +${fit.amplitude.toFixed(1)}c` : `${ordinal} partial · settling`,
       trusted
     );

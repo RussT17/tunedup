@@ -36,15 +36,17 @@ function findNote(samples, sampleRate) {
   return bestAt;
 }
 
-export function measure(file, nominal) {
+export function measure(file, nominal, options = {}) {
+  const { skip = 1.0, windowSize = WINDOW } = options;
   const { samples, sampleRate } = readWav(file);
-  // Skip the attack: start a second after the peak so the glide is spent.
+  // Skip the attack: the further in, the less glide is left to bias the answer.
   const start = Math.min(
-    findNote(samples, sampleRate) + Math.round(sampleRate * 1.0),
-    Math.max(0, samples.length - WINDOW)
+    findNote(samples, sampleRate) + Math.round(sampleRate * skip),
+    Math.max(0, samples.length - windowSize)
   );
-  const window = samples.subarray(start, start + WINDOW);
-  const { magnitude, fftSize } = spectrum(window, Math.min(WINDOW, window.length));
+  const window = samples.subarray(start, start + windowSize);
+  if (window.length < windowSize * 0.5) return null;
+  const { magnitude, fftSize } = spectrum(window, window.length);
 
   // Peak search and noise estimate are sized in Hz, not bins: this spectrum is
   // 32x finer than the tuner's, so a bin-count neighbourhood would sit inside
@@ -130,14 +132,88 @@ export function measure(file, nominal) {
   return { f1, B, partials, start: start / sampleRate };
 }
 
+/**
+ * Truth from several window positions rather than one. On real recordings a
+ * single window moves by 1.5 to 2.4 cents depending on where it sits — more
+ * than the residual-glide bias worth chasing — so take the median of several
+ * and report the spread as the honest uncertainty.
+ */
+/** How long the note stays usefully above the noise, from its loudest point. */
+function usableSpan(file) {
+  const { samples, sampleRate } = readWav(file);
+  const peakAt = findNote(samples, sampleRate);
+  const hop = Math.round(sampleRate * 0.05);
+  const level = (at) => {
+    let sum = 0;
+    for (let i = at; i < Math.min(at + hop, samples.length); i++) sum += samples[i] * samples[i];
+    return Math.sqrt(sum / hop);
+  };
+  const peak = level(peakAt);
+  let floor = Infinity;
+  for (let at = 0; at + hop < peakAt; at += hop) floor = Math.min(floor, level(at));
+  let end = peakAt;
+  for (let at = peakAt; at + hop < samples.length; at += hop) {
+    if (level(at) < Math.max(floor * 3, peak * 0.02)) break;
+    end = at;
+  }
+  return (end - peakAt) / sampleRate;
+}
+
+/**
+ * Ground truth for a single-pluck recording.
+ *
+ * Deliberately unclever. Measure at several window positions that each sit
+ * wholly inside the note, drop the ones that found little signal, take the
+ * median, and report the spread as the uncertainty. An earlier version fitted
+ * the glide's decay across the windows and extrapolated; on a soft reference
+ * pluck it was excellent and on a hard pluck it could land 20 cents out, and a
+ * ruler that is sometimes brilliant is not a ruler. What makes truth reliable
+ * is the *recording* — soft, single, long — not the cleverness of the fit.
+ */
+export function measureRobust(file, nominal, options = {}) {
+  const { sampleRate } = readWav(file);
+  const span = usableSpan(file);
+  const windowSeconds = Math.min(3, Math.max(1.2, span * 0.5));
+  const windowSize = 1 << Math.round(Math.log2(windowSeconds * sampleRate));
+  const contained = span - windowSize / sampleRate;
+  const first = Math.min(0.4, Math.max(0, contained * 0.15));
+  const last = Math.max(first, contained * 0.95);
+
+  const runs = [];
+  const count = 5;
+  for (let i = 0; i < count; i++) {
+    const skip = +(first + ((last - first) * i) / (count - 1)).toFixed(2);
+    const result = measure(file, nominal, { skip, windowSize });
+    if (!result) continue;
+    const weight = result.partials.reduce((sum, p) => sum + Math.log(1 + p.snr), 0);
+    runs.push({ t: skip, f1: result.f1, B: result.B, weight, partials: result.partials });
+  }
+  if (!runs.length) return null;
+
+  const strongest = Math.max(...runs.map((r) => r.weight));
+  const kept = runs.filter((r) => r.weight > strongest * 0.55);
+  if (!kept.length) return null;
+
+  const values = kept.map((r) => r.f1).sort((a, b) => a - b);
+  const bs = kept.map((r) => r.B).filter((b) => b > 0).sort((a, b) => a - b);
+  return {
+    f1: values[values.length >> 1],
+    spread: 1200 * Math.log2(values[values.length - 1] / values[0]),
+    B: bs.length ? bs[bs.length >> 1] : 0,
+    windows: kept.length,
+    windowSeconds: windowSize / sampleRate,
+    partials: kept[0].partials,
+  };
+}
+
 if (process.argv[1] && process.argv[1].endsWith('measure-truth.mjs')) {
   const [file, nominalArg] = process.argv.slice(2);
   const nominal = Number(nominalArg);
-  const result = measure(file, nominal);
+  const result = measureRobust(file, nominal);
   if (!result) { console.log('not enough partials'); process.exit(1); }
-  console.log(`${path.basename(file)} — window from ${result.start.toFixed(1)}s`);
-  console.log(`  partials used: ${result.partials.map((p) => p.m).join(', ')}` +
-    (result.partials.length < 4 ? '  (too few for an inharmonicity fit — B assumed 0)' : ''));
+  console.log(`${path.basename(file)} — median of ${result.windows} windows`);
+  console.log(`  partials used: ${result.partials.map((p) => p.m).join(', ')}`);
   console.log(`  inharmonicity B = ${result.B.toExponential(2)}`);
-  console.log(`  f1 = ${result.f1.toFixed(3)} Hz  (${cents(result.f1, nominal) >= 0 ? '+' : ''}${cents(result.f1, nominal).toFixed(2)} cents vs ${nominal})`);
+  console.log(`  f1 = ${result.f1.toFixed(3)} Hz  (${cents(result.f1, nominal) >= 0 ? '+' : ''}${cents(result.f1, nominal).toFixed(2)} cents vs ${nominal})` +
+    `  [${result.windows} windows of ${result.windowSeconds.toFixed(1)}s, spread ${result.spread.toFixed(2)}c]`);
 }
