@@ -297,10 +297,18 @@ function render(reading, frame) {
   // Name the note the moment the detector knows it, which is a few hundred
   // milliseconds before any reading is worth showing. Recognising the string
   // is the acknowledgement the player wants; the cents can follow.
-  const namedEarly = status === 'settling' && frame && frame.f0 && frame.clarity > 0.7;
+  // A held reading belongs to the note that has just finished. If the detector
+  // is now hearing something else entirely, stop showing the old number: the
+  // player has moved to another string and a stale note is worse than none.
+  const supersededHold = reading && status === 'held' && reading.frequency &&
+    frame && frame.f0 && frame.clarity > 0.85 &&
+    Math.abs(1200 * Math.log2(frame.f0 / reading.frequency)) > 150;
+
+  const namedEarly = (status === 'settling' || supersededHold) &&
+    frame && frame.f0 && frame.clarity > 0.7;
   if (namedEarly) showNoteName(noteFor(frame.f0));
 
-  if (!reading || !reading.frequency || status === 'idle') {
+  if (!reading || !reading.frequency || status === 'idle' || supersededHold) {
     if (!namedEarly) {
       noteNameEl.textContent = '';
       noteOctaveEl.textContent = '';

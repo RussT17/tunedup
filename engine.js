@@ -132,6 +132,14 @@ export class Engine {
     return count ? Math.sqrt(sum / count) : 0;
   }
 
+  /** True when the level is falling away the way a plucked note does. */
+  isDecaying(rms, sr) {
+    const back = Math.round(sr * 0.8);
+    if (this.written < back * 2) return false;
+    const earlier = this.rms(Math.round(sr * ENVELOPE_SECONDS), this.written - back);
+    return earlier > 0 && rms < earlier * 0.75;
+  }
+
   /** One analysis tick. Returns the frame every estimator works from. */
   analyse() {
     const sr = this.sampleRate;
@@ -154,12 +162,22 @@ export class Engine {
     let frequency = 0;
     let clarity = 0;
     if (this.read(this.window)) {
-      // Learn the room whenever nothing is being played; judge against it
-      // whenever something is.
-      const quietEnoughToLearn = !sounding && rms < Math.max(this.noiseFloor * 2, 0.0015);
+      // Learn the room whenever no note is sounding, at whatever level the
+      // room happens to be — only learning while things were quiet meant a
+      // running appliance was never learned, so the profile stayed unready
+      // exactly when it was needed and the detector locked onto a 47 Hz rumble
+      // at clarity 0.96 and called it a note.
+      //
+      // But "not sounding" also covers the tail of a note whose onset was
+      // never registered, and learning a note into the room blinds the tuner
+      // to that note. A decaying level is a note and a steady one is a room,
+      // which separates them without caring whether either is pitched.
+      const quietEnoughToLearn = !sounding && !this.isDecaying(rms, sr);
       const result = this.detector.detect(this.window, sr, {
         minRms: Math.max(this.noiseFloor * 2, 0.0008),
-        minFreq: this.minFreq,
+        // Until the room is known, assume the instrument's range rather than
+        // trusting the whole spectrum. A profile takes well under a second.
+        minFreq: this.room.ready ? this.minFreq : Math.max(this.minFreq, 65),
         maxFreq: this.maxFreq,
         room: this.room,
         learnRoom: quietEnoughToLearn,
@@ -168,7 +186,14 @@ export class Engine {
       clarity = result.clarity;
     }
 
-    const isOnset = rms > gate * 1.5 && rms > previous * 1.7 &&
+    // How much louder a new note has to get depends on what it is competing
+    // with. Against silence or a note at full voice, demand a clear jump.
+    // Against one that has decayed away to a fraction of its peak, a soft
+    // pluck is plainly a new note and was being missed for want of a 1.7x
+    // rise it had no need to clear.
+    const faded = sounding && rms < this.peakRms * 0.4;
+    const rise = faded ? 1.25 : 1.7;
+    const isOnset = rms > gate * 1.5 && rms > previous * rise &&
       (!sounding || (this.written - this.onsetSample) / sr > 0.15);
 
     if (isOnset) {
@@ -177,10 +202,13 @@ export class Engine {
       this.quietSince = -1;
       this.onsetId++;
     } else if (!sounding && this.aboveGateSince >= 0 &&
-               (this.written - this.aboveGateSince) / sr > 0.4) {
-      // Something was already ringing when we started listening (or the attack
-      // was too gradual to trip the onset test). Treat it as a note in progress
-      // rather than never showing a reading.
+               (this.written - this.aboveGateSince) / sr > 0.4 &&
+               this.isDecaying(rms, sr) && clarity > 0.8) {
+      // Something was already ringing when we started listening, or its attack
+      // was too gradual to trip the onset test. A string decays and an
+      // appliance does not, which is what separates the two — without that
+      // test this fired on steady noise and invented notes out of a running
+      // dryer.
       this.onsetSample = this.aboveGateSince;
       this.peakRms = Math.max(this.peakRms, rms);
       this.quietSince = -1;
@@ -209,6 +237,7 @@ export class Engine {
       noiseFloor: this.noiseFloor,
       peakRms: this.peakRms,
       onsetId: this.onsetId,
+      roomReady: this.room.ready,
       onsetAge: this.onsetSample >= 0 ? (this.written - this.onsetSample) / sr : null,
       f0: frequency,
       clarity,
