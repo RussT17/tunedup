@@ -12,7 +12,7 @@ const CLARITY_THRESHOLD = 0.55;
 const PEAK_RATIO = 0.9;
 
 /** Iterative in-place radix-2 FFT. `inverse` skips the 1/N scaling (unneeded here). */
-function fft(re, im, inverse) {
+export function fft(re, im, inverse) {
   const n = re.length;
   for (let i = 1, j = 0; i < n; i++) {
     let bit = n >> 1;
@@ -59,7 +59,7 @@ export class PitchDetector {
    * @returns {{frequency:number, clarity:number, rms:number}} — frequency is 0
    * when nothing convincing was found.
    */
-  detect(input, sampleRate) {
+  detect(input, sampleRate, minRms = 0.004) {
     const n = this.size;
     const x = this.work;
 
@@ -76,7 +76,7 @@ export class PitchDetector {
       this.cumPower[i + 1] = power;
     }
     const rms = Math.sqrt(power / n);
-    if (rms < 0.004) return { frequency: 0, clarity: 0, rms };
+    if (rms < minRms) return { frequency: 0, clarity: 0, rms };
 
     // Autocorrelation via the Wiener–Khinchin theorem.
     const m = this.fftSize;
@@ -140,4 +140,57 @@ export class PitchDetector {
 
     return { frequency, clarity: Math.min(1, y1), rms };
   }
+}
+
+/**
+ * Interpolated magnitude spectrum of the newest `size` samples, Hann windowed.
+ * Used to pick which partial to track and to measure string inharmonicity.
+ */
+export function spectrum(input, size) {
+  let fftSize = 1;
+  while (fftSize < size) fftSize <<= 1;
+  const re = new Float32Array(fftSize);
+  const im = new Float32Array(fftSize);
+  for (let i = 0; i < size; i++) {
+    re[i] = input[i] * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (size - 1)));
+  }
+  fft(re, im, false);
+  const bins = fftSize >> 1;
+  const magnitude = new Float32Array(bins);
+  for (let i = 0; i < bins; i++) magnitude[i] = Math.hypot(re[i], im[i]);
+  return { magnitude, fftSize };
+}
+
+/**
+ * Refines the spectral peak nearest `target` (Hz) by parabolic interpolation on
+ * the log magnitudes. Returns null when there is no peak worth naming.
+ */
+export function refinePeak(magnitude, fftSize, sampleRate, target, searchBins = 4) {
+  const centre = Math.round((target * fftSize) / sampleRate);
+  if (centre < 2 || centre >= magnitude.length - 2) return null;
+  let peak = centre;
+  for (let i = centre - searchBins; i <= centre + searchBins; i++) {
+    if (i > 0 && i < magnitude.length && magnitude[i] > magnitude[peak]) peak = i;
+  }
+  if (peak < 1 || peak >= magnitude.length - 1) return null;
+  const a = Math.log(magnitude[peak - 1] + 1e-12);
+  const b = Math.log(magnitude[peak] + 1e-12);
+  const c = Math.log(magnitude[peak + 1] + 1e-12);
+  const denom = a - 2 * b + c;
+  const shift = denom !== 0 ? (0.5 * (a - c)) / denom : 0;
+  const bin = peak + Math.max(-1, Math.min(1, shift));
+
+  // Local noise estimate: median of the surrounding bins, away from the peak.
+  const neighbourhood = [];
+  for (let i = peak - 24; i <= peak + 24; i++) {
+    if (i > 0 && i < magnitude.length && Math.abs(i - peak) > 3) neighbourhood.push(magnitude[i]);
+  }
+  neighbourhood.sort((x, y) => x - y);
+  const floor = neighbourhood.length ? neighbourhood[neighbourhood.length >> 1] : 1e-9;
+
+  return {
+    frequency: (bin * sampleRate) / fftSize,
+    amplitude: magnitude[peak],
+    snr: magnitude[peak] / (floor + 1e-12),
+  };
 }

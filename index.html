@@ -21,50 +21,54 @@
 
   <header class="topbar">
     <div class="wordmark">TunedUp</div>
-    <button id="refBtn" class="ref" type="button" aria-label="Reference pitch">A<span>4</span> <b id="refValue">440</b> Hz</button>
   </header>
 
   <div class="stage">
-  <section class="readout" aria-live="polite">
-    <div class="note">
-      <span id="noteName" class="note-name"></span><span id="noteOctave" class="note-octave"></span>
-    </div>
-    <div id="centsText" class="cents">Tap to start</div>
-  </section>
+    <section class="readout" aria-live="polite">
+      <div class="note">
+        <span id="noteName" class="note-name"></span><span id="noteOctave" class="note-octave"></span>
+      </div>
+      <div id="centsText" class="cents"></div>
+    </section>
 
-  <section class="gauge-wrap">
-    <svg class="gauge" viewBox="0 0 300 186" role="img" aria-label="Tuning meter">
-      <g id="ticks"></g>
-      <path class="arc" d="M 39.1 109.6 A 118 118 0 0 1 260.9 109.6" />
-      <g id="needle" class="needle">
-        <line x1="150" y1="150" x2="150" y2="54" />
-        <circle cx="150" cy="150" r="7" />
-      </g>
-      <circle id="target" class="target" cx="150" cy="22" r="4" />
-    </svg>
-    <div id="hint" class="hint">Play a single note</div>
-  </section>
+    <section class="gauge-wrap">
+      <svg class="gauge" viewBox="0 0 300 186" role="img" aria-label="Tuning meter">
+        <g id="ticks"></g>
+        <path class="arc" d="M 39.1 109.6 A 118 118 0 0 1 260.9 109.6" />
+        <g id="needle" class="needle">
+          <line x1="150" y1="150" x2="150" y2="54" />
+          <circle cx="150" cy="150" r="7" />
+        </g>
+        <circle id="target" class="target" cx="150" cy="22" r="4" />
+      </svg>
+      <div id="hint" class="hint">Play a single note</div>
+    </section>
   </div>
 
   <footer class="footer">
-    <div id="freqText" class="freq"></div>
+    <div id="detailText" class="detail"></div>
+
+    <div class="controls">
+      <label class="chip">
+        <span class="chip-label">Reference</span>
+        <select id="refSelect" aria-label="Reference pitch"></select>
+      </label>
+      <label class="chip">
+        <span class="chip-label">Mode</span>
+        <select id="modeSelect" aria-label="Detection mode"></select>
+      </label>
+      <label class="chip">
+        <span class="chip-label">String</span>
+        <select id="stringSelect" aria-label="Target string"></select>
+      </label>
+    </div>
+
+    <p id="modeBlurb" class="blurb"></p>
     <button id="startBtn" class="start" type="button">Start tuning</button>
     <p id="errorText" class="error" hidden></p>
   </footer>
 
 </main>
-
-<div id="refSheet" class="sheet" hidden>
-  <div class="sheet-card" role="dialog" aria-label="Reference pitch">
-    <p class="sheet-title">Reference pitch — A4</p>
-    <div class="stepper">
-      <button id="refDown" type="button" aria-label="Lower reference pitch">−</button>
-      <span id="refBig">440</span><i class="sheet-unit">Hz</i>
-      <button id="refUp" type="button" aria-label="Raise reference pitch">+</button>
-    </div>
-    <button id="refDone" class="sheet-done" type="button">Done</button>
-  </div>
-</div>
 
 <script type="module" src="./app.js"></script>
 </body>

@@ -48,20 +48,6 @@ html, body {
   text-transform: uppercase;
   color: var(--muted);
 }
-.ref {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 13px;
-  padding: 6px 8px;
-  border-radius: 10px;
-  cursor: pointer;
-}
-.ref span { font-size: 10px; vertical-align: sub; }
-.ref b { color: var(--fg); font-weight: 600; }
-.ref:active { background: var(--bg-lift); }
 
 /* ---------- readout ---------- */
 .stage {
@@ -156,12 +142,56 @@ html, body {
 }
 
 /* ---------- footer ---------- */
-.footer { display: grid; gap: 12px; justify-items: center; }
-.freq {
+.footer { display: grid; gap: 12px; justify-items: center; width: 100%; }
+.detail {
   font-size: 13px;
   color: var(--dim);
   min-height: 18px;
   letter-spacing: .02em;
+}
+
+.controls {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  width: 100%;
+}
+.chip {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.chip-label {
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.chip select {
+  appearance: none;
+  width: 100%;
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 10px;
+  background: var(--bg-lift);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  text-align: center;
+  text-align-last: center;
+  cursor: pointer;
+}
+.chip select:active { background: #1c222a; }
+
+.blurb {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dim);
+  max-width: 42ch;
+  min-height: 36px;
 }
 .start {
   appearance: none;
@@ -186,6 +216,19 @@ html, body {
 }
 
 /* ---------- states ---------- */
+/* Idle: the whole screen starts the tuner, so nothing on it claims to be tappable
+   except the one button that is. */
+.state-idle { cursor: pointer; }
+
+.settling .note-name { color: var(--muted); }
+.settling .cents { color: var(--dim); }
+.settling .needle { opacity: .45; }
+
+/* Shown, but not yet trusted: readable, never green. */
+.provisional .note-name,
+.provisional .cents,
+.provisional .needle { opacity: .6; }
+
 .start.ghost {
   background: transparent;
   color: var(--muted);
@@ -219,58 +262,8 @@ html, body {
 .stale .note-name,
 .stale .note-octave,
 .stale .cents,
-.stale .freq { opacity: .38; }
+.stale .detail { opacity: .38; }
 .stale .needle { opacity: .38; }
-
-/* ---------- reference sheet ---------- */
-.sheet {
-  position: fixed;
-  inset: 0;
-  background: rgba(5, 7, 9, .72);
-  backdrop-filter: blur(6px);
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  z-index: 10;
-}
-.sheet[hidden] { display: none; }
-.sheet-card {
-  background: var(--bg-lift);
-  border-radius: 22px;
-  padding: 22px;
-  width: min(320px, 100%);
-  display: grid;
-  gap: 18px;
-  justify-items: center;
-}
-.sheet-title { margin: 0; font-size: 14px; color: var(--muted); }
-.stepper { display: flex; align-items: center; gap: 22px; }
-.stepper button {
-  appearance: none;
-  border: 0;
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  background: #202731;
-  color: var(--fg);
-  font-size: 26px;
-  line-height: 1;
-  cursor: pointer;
-}
-.stepper button:active { background: #2b3441; }
-.stepper span { font-size: 32px; font-weight: 600; }
-.sheet-unit { font-style: normal; font-size: 13px; color: var(--muted); margin-left: -14px; align-self: flex-end; padding-bottom: 6px; }
-.sheet-done {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  font-size: 16px;
-  font-weight: 600;
-  padding: 8px 16px;
-  cursor: pointer;
-}
 
 @media (prefers-reduced-motion: reduce) {
   * { transition-duration: .01ms !important; }
