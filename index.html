@@ -67,8 +67,14 @@
 
     <p id="modeBlurb" class="blurb"></p>
     <div class="actions">
-      <button id="startBtn" class="start" type="button">Start tuning</button>
-      <button id="traceBtn" class="link" type="button">Trace</button>
+      <button id="calibrateBtn" class="start calibrate" type="button">
+        <span class="calibrate-fill" id="calibrateFill"></span>
+        <span class="calibrate-label" id="calibrateLabel">Hold to calibrate</span>
+      </button>
+      <div class="actions-row">
+        <button id="traceBtn" class="link" type="button">Trace</button>
+        <button id="stopBtn" class="link" type="button" hidden>Stop</button>
+      </div>
     </div>
     <p id="errorText" class="error" hidden></p>
   </footer>

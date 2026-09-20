@@ -92,17 +92,27 @@ export function buildSession(seed = 1, options = {}) {
   return { signal, events, applianceEnds: applianceEnds / SR };
 }
 
-export function runSession(modeId, signal, target = null) {
+export function runSession(modeId, signal, target = null, options = {}) {
+  const { calibrate = true } = options;
   const engine = new Engine(SR);
   engine.setTarget(target);
   const estimator = createEstimator(modeId, { sampleRate: SR, engine, targetHz: () => target });
   const tick = Math.round(SR * 0.04);
   let next = tick;
   const frames = [];
+  // A real session begins with the user holding the calibrate button while the
+  // room — appliance and all — is measured.
+  if (calibrate) engine.beginCalibration();
+  let calibrated = !calibrate;
   for (let offset = 0; offset < signal.length; offset += 1024) {
     engine.push(signal.subarray(offset, Math.min(offset + 1024, signal.length)));
     while (engine.written >= next) {
       const frame = engine.analyse();
+      if (!calibrated) {
+        if (frame.calibrationProgress >= 50) { engine.finishCalibration(); calibrated = true; }
+        next += tick;
+        continue;
+      }
       frames.push({ frame, reading: estimator.update(frame) });
       next += tick;
     }

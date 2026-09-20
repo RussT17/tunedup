@@ -132,6 +132,25 @@ export class Engine {
     return count ? Math.sqrt(sum / count) : 0;
   }
 
+  /**
+   * Start or finish an explicit room calibration. While calibrating the engine
+   * only listens: no onsets, no readings, nothing but the room going into the
+   * profile.
+   */
+  beginCalibration() {
+    this.room.beginCalibration();
+    this.onsetSample = -1;
+    this.calibrationSuspect = false;
+  }
+
+  finishCalibration() {
+    return this.room.finishCalibration();
+  }
+
+  abandonCalibration() {
+    this.room.abandonCalibration();
+  }
+
   /** True when the level is falling away the way a plucked note does. */
   isDecaying(rms, sr) {
     const back = Math.round(sr * 0.8);
@@ -172,7 +191,8 @@ export class Engine {
       // never registered, and learning a note into the room blinds the tuner
       // to that note. A decaying level is a note and a steady one is a room,
       // which separates them without caring whether either is pitched.
-      const quietEnoughToLearn = !sounding && !this.isDecaying(rms, sr);
+      const quietEnoughToLearn = this.room.calibrating ||
+        (!sounding && !this.isDecaying(rms, sr));
       const result = this.detector.detect(this.window, sr, {
         minRms: Math.max(this.noiseFloor * 2, 0.0008),
         // Until the room is known, assume the instrument's range rather than
@@ -186,14 +206,37 @@ export class Engine {
       clarity = result.clarity;
     }
 
-    // How much louder a new note has to get depends on what it is competing
-    // with. Against silence or a note at full voice, demand a clear jump.
-    // Against one that has decayed away to a fraction of its peak, a soft
-    // pluck is plainly a new note and was being missed for want of a 1.7x
-    // rise it had no need to clear.
-    const faded = sounding && rms < this.peakRms * 0.4;
-    const rise = faded ? 1.25 : 1.7;
-    const isOnset = rms > gate * 1.5 && rms > previous * rise &&
+    if (this.room.calibrating) {
+      // Someone is holding the button and has promised silence. Watch for a
+      // note ringing through it anyway — the case an implicit calibration
+      // could never catch — and say so rather than quietly learning a string
+      // as though it were the room.
+      if (clarity > 0.9 && rms > Math.max(this.noiseFloor * 6, 0.004)) {
+        this.calibrationSuspect = true;
+      }
+      return {
+        sample: this.written,
+        time: this.written / sr,
+        rms,
+        noiseFloor: this.noiseFloor,
+        peakRms: 0,
+        onsetId: this.onsetId,
+        onsetAge: null,
+        f0: 0,
+        clarity: 0,
+        calibrating: true,
+        calibrationProgress: this.room.progress,
+        calibrationSuspect: this.calibrationSuspect,
+      };
+    }
+
+    // Spectral flux was tried here as a second way to spot a new note — a soft
+    // pluck over a ringing string adds partials without adding much level, and
+    // flux sees that where a level test cannot. It fired where it should
+    // (background p95 0.27, softest pluck 0.38) and changed nothing, because
+    // by then most missed notes were already getting onsets: the bottleneck
+    // had moved into the estimator. It cost accuracy, so it is gone.
+    const isOnset = rms > gate * 1.5 && rms > previous * 1.7 &&
       (!sounding || (this.written - this.onsetSample) / sr > 0.15);
 
     if (isOnset) {

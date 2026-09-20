@@ -5,6 +5,9 @@ import { renderTrace } from './trace.js';
 const NOTE_NAMES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
 const TICK_MS = 40;
 const RECORD_SECONDS = 15;
+// Long enough to average out a room's own fluctuation, short enough that
+// recalibrating when the dishwasher starts is not a chore.
+const CALIBRATE_SECONDS = 2;
 const RECORD_PREROLL = 0.5;     // a moment before the tap, in case it came late
 const IN_TUNE_CENTS = 3;
 // A pluck this sharp at the attack has a glide that takes seconds to finish.
@@ -20,7 +23,10 @@ const centsEl = document.getElementById('centsText');
 const detailEl = document.getElementById('detailText');
 const needleEl = document.getElementById('needle');
 const hintEl = document.getElementById('hint');
-const startBtn = document.getElementById('startBtn');
+const calibrateBtn = document.getElementById('calibrateBtn');
+const calibrateFill = document.getElementById('calibrateFill');
+const calibrateLabel = document.getElementById('calibrateLabel');
+const stopBtn = document.getElementById('stopBtn');
 const errorEl = document.getElementById('errorText');
 const blurbEl = document.getElementById('modeBlurb');
 const arcProgressEl = document.getElementById('arcProgress');
@@ -61,6 +67,8 @@ let lastTrace = null;
 let traceScales = null;
 let traceOpen = false;
 let recording = null;
+let holding = false;
+let calibrated = false;
 
 buildTicks();
 buildControls();
@@ -81,17 +89,21 @@ traceChart.addEventListener('pointermove', onTracePointer);
 traceChart.addEventListener('pointerdown', onTracePointer);
 traceChart.addEventListener('pointerleave', () => { traceReadout.textContent = ''; });
 
-startBtn.addEventListener('click', (event) => {
+stopBtn.addEventListener('click', (event) => {
   event.stopPropagation();
-  if (listening) stop(); else start();
+  stop();
 });
 
-// Everything on the idle screen starts the tuner, so there is nothing to aim at.
-app.addEventListener('click', (event) => {
-  if (listening || starting) return;
-  if (event.target.closest('select, label, button')) return;
-  start();
-});
+for (const type of ['pointerdown']) {
+  calibrateBtn.addEventListener(type, (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    beginHold();
+  });
+}
+for (const type of ['pointerup', 'pointercancel', 'pointerleave']) {
+  calibrateBtn.addEventListener(type, () => endHold());
+}
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && listening) {
@@ -99,8 +111,6 @@ document.addEventListener('visibilitychange', () => {
     requestWakeLock();
   }
 });
-
-tryAutoStart();
 
 /* ------------------------------------------------------------------ audio */
 
@@ -170,8 +180,8 @@ async function openMicrophone() {
   listening = true;
   app.classList.remove('state-idle', 'state-error');
   app.classList.add('state-listening');
-  startBtn.textContent = 'Stop';
-  startBtn.classList.add('ghost');
+  stopBtn.hidden = false;
+  showCalibrateLabel();
   requestWakeLock();
   loop(performance.now());
 }
@@ -206,8 +216,13 @@ function stop() {
   acknowledgedOnset = -1;
   shownConfidence = 0;
   app.classList.add('state-idle');
-  startBtn.textContent = 'Start tuning';
-  startBtn.classList.remove('ghost');
+  app.classList.remove('state-calibrating');
+  stopBtn.hidden = true;
+  holding = false;
+  calibrated = false;
+  calibrateBtn.classList.remove('holding');
+  calibrateFill.style.setProperty('--fill', '0%');
+  showCalibrateLabel();
   currentMidi = null;
   trace = null;
   recording = null;
@@ -218,19 +233,78 @@ function stop() {
   needleEl.style.transform = 'rotate(0deg)';
 }
 
-async function tryAutoStart() {
-  try {
-    const status = await navigator.permissions.query({ name: 'microphone' });
-    if (status.state === 'granted') start();
-  } catch {
-    /* Permissions API is unavailable (Safari) — the user taps to start. */
-  }
-}
+// No autostart any more: tuning begins with a calibration the user performs
+// deliberately, because only they can promise that nothing is playing.
 
 function fail(message) {
   errorEl.textContent = message;
   errorEl.hidden = false;
   app.classList.add('state-error');
+}
+
+/* ----------------------------------------------------------- calibration */
+
+async function beginHold() {
+  if (holding) return;
+  holding = true;
+  calibrateBtn.classList.add('holding');
+
+  if (!listening) {
+    await start();
+    // A permission prompt steals the press, so the hold is gone by the time
+    // the microphone is live. The button is right there to press again.
+    if (!listening) { endHold(); return; }
+  }
+  if (!holding || !engine) { endHold(); return; }
+
+  engine.beginCalibration();
+  app.classList.add('state-calibrating');
+  hintEl.textContent = 'Stay quiet — listening to the room';
+  calibrateLabel.textContent = 'Listening…';
+  calibrateFill.style.setProperty('--fill', '0%');
+}
+
+function endHold(reason) {
+  const wasHolding = holding;
+  holding = false;
+  calibrateBtn.classList.remove('holding');
+  calibrateFill.style.setProperty('--fill', '0%');
+  if (engine && engine.room.calibrating) engine.abandonCalibration();
+  app.classList.remove('state-calibrating');
+  showCalibrateLabel(reason);
+  if (wasHolding && reason) hintEl.textContent = reason;
+  else hintEl.textContent = listening ? listeningHint() : '';
+}
+
+function showCalibrateLabel(reason) {
+  calibrateLabel.textContent = reason
+    ? 'Hold again'
+    : listening
+      ? 'Recalibrate'
+      : 'Hold to calibrate';
+}
+
+/** Driven by frames of audio, so the bar tracks what was actually heard. */
+function pollCalibration(frame) {
+  if (!frame.calibrating) return false;
+  const needed = CALIBRATE_SECONDS / (TICK_MS / 1000);
+
+  if (frame.calibrationSuspect) {
+    endHold('Something was still ringing — let it fade, then hold again');
+    return true;
+  }
+  calibrateFill.style.setProperty('--fill', `${Math.min(100, (frame.calibrationProgress / needed) * 100).toFixed(0)}%`);
+  if (frame.calibrationProgress >= needed) {
+    engine.finishCalibration();
+    calibrated = true;
+    holding = false;
+    calibrateBtn.classList.remove('holding');
+    calibrateFill.style.setProperty('--fill', '0%');
+    app.classList.remove('state-calibrating');
+    showCalibrateLabel();
+    hintEl.textContent = listeningHint();
+  }
+  return true;
 }
 
 /* ------------------------------------------------------------- estimation */
@@ -257,6 +331,7 @@ function loop(now) {
   if (now - lastTickAt >= TICK_MS && document.visibilityState === 'visible') {
     lastTickAt = now;
     const frame = engine.analyse();
+    if (pollCalibration(frame)) { animateNeedle(); return; }
     const reading = estimator.update(frame);
     acknowledge(frame);
     recordTrace(frame, reading);

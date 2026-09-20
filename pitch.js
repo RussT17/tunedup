@@ -83,7 +83,10 @@ export class PitchDetector {
       this.cumPower[i + 1] = power;
     }
     const rms = Math.sqrt(power / n);
-    if (rms < minRms) return { frequency: 0, clarity: 0, rms };
+    // A silent room is below any sensible pitch threshold, and silence is
+    // exactly what a room profile needs to measure — so when learning, the
+    // level gate is skipped and the spectrum is taken anyway.
+    if (rms < minRms && !(room && learnRoom)) return { frequency: 0, clarity: 0, rms };
 
     // Autocorrelation via the Wiener–Khinchin theorem.
     const m = this.fftSize;
@@ -101,6 +104,7 @@ export class PitchDetector {
       const bins = m >> 1;
       if (learnRoom) {
         room.observe(this.re.subarray(0, bins));
+        if (rms < minRms) return { frequency: 0, clarity: 0, rms };
       } else if (room.ready) {
         // Keep only the bands carrying more than this room's own noise. The
         // autocorrelation then sees the note and not the fridge — without

@@ -21,22 +21,69 @@ const READY_AFTER = 15;  // observations before the profile is worth using
 export class RoomProfile {
   constructor(bins) {
     this.baseline = new Float64Array(bins);
+    this.accumulator = new Float64Array(bins);
     this.observations = 0;
+    this.calibrating = false;
+    this.samples = 0;
+    this.calibrated = false;
   }
 
-  /** Fold one power spectrum of near-silence into the baseline. */
+  /** Begin an explicit calibration: the user has said nothing is playing. */
+  beginCalibration() {
+    this.accumulator.fill(0);
+    this.samples = 0;
+    this.calibrating = true;
+  }
+
+  /** Average of everything heard during calibration becomes the new baseline. */
+  finishCalibration() {
+    if (!this.samples) { this.calibrating = false; return false; }
+    for (let i = 0; i < this.baseline.length; i++) {
+      this.baseline[i] = this.accumulator[i] / this.samples;
+    }
+    this.observations = READY_AFTER;
+    this.calibrating = false;
+    this.calibrated = true;
+    return true;
+  }
+
+  abandonCalibration() {
+    this.calibrating = false;
+    this.samples = 0;
+  }
+
+  /**
+   * Fold one power spectrum into the profile.
+   *
+   * During calibration everything heard is the room, by the user's word, so it
+   * is simply averaged. Afterwards the passive path may only ever *lower* the
+   * baseline. That asymmetry matters: lowering it — the appliance stopped —
+   * can only make the tuner more sensitive, while raising it risks masking a
+   * string, which fails silently and stays failed. Rooms that get louder are
+   * what the recalibrate button is for.
+   */
   observe(power) {
+    if (this.calibrating) {
+      for (let i = 0; i < this.accumulator.length; i++) this.accumulator[i] += power[i];
+      this.samples++;
+      return;
+    }
     const { baseline } = this;
     for (let i = 0; i < baseline.length; i++) {
       const value = power[i];
       if (this.observations === 0) baseline[i] = value;
-      else baseline[i] += (value - baseline[i]) * (value > baseline[i] ? RISE : FALL);
+      else if (value < baseline[i]) baseline[i] += (value - baseline[i]) * FALL;
+      else if (!this.calibrated) baseline[i] += (value - baseline[i]) * RISE;
     }
     this.observations++;
   }
 
   get ready() {
     return this.observations >= READY_AFTER;
+  }
+
+  get progress() {
+    return this.calibrating ? this.samples : 0;
   }
 
   /** Power a band must exceed to count as something being played. */
