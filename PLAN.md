@@ -8,18 +8,60 @@ them in, and what "good" has to mean before we can claim it.
 Concrete enough to test, because otherwise we will argue about taste:
 
 1. **Right.** Within ±1 cent of ground truth on every sample, within 1.5 s of a
-   normal pluck, on every string.
-2. **Honest.** Never shows a confident wrong reading. If it says *In tune*, it is
+   normal pluck, on every string. (Today: met on three strings of six.)
+2. **Quick.** Which way to turn the peg, within 250 ms of the pluck, and never
+   wrong. This is a separate goal from being right, not a softer version of it —
+   see below.
+3. **Honest.** Never shows a confident wrong reading. If it says *In tune*, it is
    within 3 cents. If it does not know yet, it says so and looks like it.
-3. **Patient.** Tracks a softly plucked low string for at least 4 seconds without
+4. **Patient.** Tracks a softly plucked low string for at least 4 seconds without
    losing it or going jumpy at the end.
-4. **Portable.** Works for a stranger, on a different guitar, in a noisier room,
+5. **Portable.** Works for a stranger, on a different guitar, in a noisier room,
    on a different phone. Nothing tuned to one dataset.
-5. **Bare.** One screen, no configuration, usable within two seconds of opening.
+6. **Bare.** One screen, no configuration, usable within two seconds of opening.
    A first-time user sees a note and a needle, and nothing else.
 
 Today we are somewhere around 3 or 4 cents on a good string, honest but slow to
 commit, and the main screen has three dropdowns on it that exist for debugging.
+
+## Speed and accuracy are not one dial
+
+The obvious framing is a single trade — wait longer, be more right. Measured on
+the real samples, that framing is wrong, because *direction* and *magnitude*
+become trustworthy at very different times:
+
+```
+string   truth    direction right   within 5c   within 1c
+  e2    -11.1c        0.26 s          0.94 s      never
+  a2     -8.2c        0.26 s          0.47 s      1.63 s
+  d3     -6.2c        0.26 s          0.26 s      1.13 s
+  g3     -6.3c        0.26 s          0.58 s      never
+  b3     -5.1c        0.26 s          0.62 s      never
+  e4     +0.8c        0.26 s          0.26 s      1.11 s
+```
+
+Direction is right from the first reading the app produces, and stays right.
+The precise number takes three to six times longer. So the answer is not to
+pick a point on a curve; it is to **say the fast thing as soon as it is known
+and the slow thing when it is known**, and to make the difference visible.
+
+Physics supplies an asymmetry worth exploiting. The pluck glide is always
+*sharp* — tension rises with amplitude, never falls. So:
+
+- A **flat** reading is trustworthy immediately. The glide can only have pushed
+  it up, so a string reading flat is at least that flat, and probably more.
+- A **sharp** reading is ambiguous early: it could be a sharp string or it could
+  be the glide, and those look identical for the first second.
+
+That gives a provable rule rather than a guess: flat beyond a few cents is
+actionable at once; sharp is only actionable once the reading exceeds what the
+glide could account for, or once the fit has settled. The bound tightens as
+soon as the instrument profile knows this player's own glide.
+
+The practical consequence is that the case where speed matters most — a string
+badly out of tune — is also the easy case, because 40 cents flat swamps any
+plausible glide. The ambiguity only bites within about 20 cents, which is
+exactly where precision matters more than speed anyway.
 
 ## The order is forced, not arbitrary
 
@@ -81,6 +123,12 @@ finding out.
   string does not change octave mid-note, so that is checkable.
 - Then run the bake-off and **pick one default**. Keep the rest as code behind
   the debug door, or delete them; do not keep five modes in a shipped app.
+- Expect the answer to be a **staged pipeline rather than a single mode**. The
+  latency table above says direction is available long before the settled
+  number, and the modes differ in when they first speak at all: MPM reports at
+  0.09 s, the phase lock needs 0.24 s to acquire. One pipeline that shows
+  direction from the fast estimate and hands over to the settled one is better
+  than any single mode, and it is not what "pick a winner" would have produced.
 
 **Done when** one mode is the answer and we can say why, with numbers.
 
@@ -89,6 +137,10 @@ finding out.
 Accuracy we now have some grip on. This is the part you flagged first and it is
 still the weakest: *"it was hard for me to tell."*
 
+- Stage the display against the latency table: direction as soon as it is
+  known, magnitude when it is, the in-tune claim only once settled. A needle
+  that can swing before the number is committed gives the fast answer without
+  lying about the slow one.
 - Decide what the first second after a pluck shows. It is genuinely sharp then,
   so any number is misleading; the current dimmed-provisional reading is honest
   but ambiguous. Options: show nothing until settled, show a confidence ring
