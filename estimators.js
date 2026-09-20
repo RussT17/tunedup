@@ -112,7 +112,18 @@ class Estimator {
     return this.smoothed;
   }
 
-  publish(frame, frequency, detail = '', settled = true, glide = 0) {
+  /**
+   * How much this reading can still be expected to move, 0 to 1. Drives the
+   * app's "still firming up" display, which is a separate channel from the
+   * instant acknowledgement that a note was heard at all.
+   */
+  confidenceFrom(frame, trust) {
+    if (typeof trust === 'number') return Math.max(0, Math.min(1, trust));
+    if (frame.onsetAge === null) return 1;
+    return Math.max(0, Math.min(1, (frame.onsetAge - 0.15) / 0.7));
+  }
+
+  publish(frame, frequency, detail = '', settled = true, glide = 0, confidence = null) {
     // A ringing string cannot move hundreds of cents between two 40 ms ticks.
     // Anything that fast is the estimator coming apart as the note dies, so
     // hold the last good reading instead of showing the wreckage.
@@ -125,7 +136,14 @@ class Estimator {
     this.guardOnsetId = frame.onsetId;
     this.settled = frequency;
     this.settledAt = frame.time;
-    return { frequency, status: 'live', detail, settled, glide };
+    return {
+      frequency,
+      status: 'live',
+      detail,
+      settled,
+      glide,
+      confidence: this.confidenceFrom(frame, confidence),
+    };
   }
 
   /** What the mode is currently fitting, for the trace view. Null when it fits nothing. */
@@ -310,7 +328,8 @@ class PredictEstimator extends Estimator {
       this.smooth(frame, this.anchor * Math.pow(2, fit.reported / 1200)),
       trusted ? `settled · pluck +${fit.amplitude.toFixed(1)}c` : 'still settling',
       trusted,
-      trusted ? fit.amplitude : 0
+      trusted ? fit.amplitude : 0,
+      fit.trust
     );
   }
 }
@@ -569,7 +588,8 @@ class StudioEstimator extends StrobeEstimator {
       this.smooth(frame, this.predictor.anchor * Math.pow(2, fit.reported / 1200)),
       trusted ? `${ordinal} partial · pluck +${fit.amplitude.toFixed(1)}c` : `${ordinal} partial · settling`,
       trusted,
-      trusted ? fit.amplitude : 0
+      trusted ? fit.amplitude : 0,
+      fit.trust
     );
   }
 }

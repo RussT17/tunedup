@@ -23,6 +23,8 @@ const hintEl = document.getElementById('hint');
 const startBtn = document.getElementById('startBtn');
 const errorEl = document.getElementById('errorText');
 const blurbEl = document.getElementById('modeBlurb');
+const arcProgressEl = document.getElementById('arcProgress');
+const strikeEl = document.getElementById('strike');
 const tracePanel = document.getElementById('tracePanel');
 const traceChart = document.getElementById('traceChart');
 const traceStats = document.getElementById('traceStats');
@@ -49,6 +51,9 @@ let lastTickAt = 0;
 let displayedCents = 0;
 let needleAngle = 0;
 let currentMidi = null;
+let acknowledgedOnset = -1;
+let shownConfidence = 0;
+let wasConfidentlyInTune = false;
 
 // Per-note trace: every frame of the current pluck, kept so it can be plotted.
 let trace = null;
@@ -197,7 +202,9 @@ function stop() {
   estimator = null;
   releaseWakeLock();
 
-  app.classList.remove('state-listening', 'has-note', 'in-tune', 'flat', 'sharp', 'stale', 'settling', 'provisional');
+  app.classList.remove('state-listening', 'has-note', 'in-tune', 'flat', 'sharp', 'stale', 'settling', 'provisional', 'confident');
+  acknowledgedOnset = -1;
+  shownConfidence = 0;
   app.classList.add('state-idle');
   startBtn.textContent = 'Start tuning';
   startBtn.classList.remove('ghost');
@@ -251,26 +258,59 @@ function loop(now) {
     lastTickAt = now;
     const frame = engine.analyse();
     const reading = estimator.update(frame);
+    acknowledge(frame);
     recordTrace(frame, reading);
-    render(reading);
+    render(reading, frame);
     pollRecording();
     if (traceOpen) drawTrace();
   }
   animateNeedle();
 }
 
-function render(reading) {
+/**
+ * The moment a pluck lands, before anything is known about its pitch. Keeping
+ * this separate from the reading is what lets the app feel immediate and still
+ * take its time about the number — they are different channels, not a
+ * trade-off between responsiveness and stability.
+ */
+function acknowledge(frame) {
+  if (frame.onsetAge === null || frame.onsetId === acknowledgedOnset) return;
+  acknowledgedOnset = frame.onsetId;
+  wasConfidentlyInTune = false;
+  shownConfidence = 0;
+  if (strikeEl.animate) {
+    strikeEl.animate(
+      [
+        { opacity: 0.55, transform: 'scale(1)' },
+        { opacity: 0, transform: 'scale(8)' },
+      ],
+      { duration: 520, easing: 'cubic-bezier(.22,.61,.36,1)' }
+    );
+  }
+}
+
+function render(reading, frame) {
   const status = reading ? reading.status : 'idle';
   app.classList.toggle('settling', status === 'settling');
   if (!reading || status === 'idle') app.classList.remove('provisional');
 
+  // Name the note the moment the detector knows it, which is a few hundred
+  // milliseconds before any reading is worth showing. Recognising the string
+  // is the acknowledgement the player wants; the cents can follow.
+  const namedEarly = status === 'settling' && frame && frame.f0 && frame.clarity > 0.7;
+  if (namedEarly) showNoteName(noteFor(frame.f0));
+
   if (!reading || !reading.frequency || status === 'idle') {
-    noteNameEl.textContent = '';
-    noteOctaveEl.textContent = '';
-    centsEl.textContent = '';
+    if (!namedEarly) {
+      noteNameEl.textContent = '';
+      noteOctaveEl.textContent = '';
+    }
+    centsEl.textContent = namedEarly ? 'listening…' : '';
     detailEl.textContent = '';
-    app.classList.remove('has-note', 'in-tune', 'flat', 'sharp', 'stale');
-    hintEl.textContent = listening ? listeningHint() : '';
+    app.classList.remove('in-tune', 'flat', 'sharp', 'stale', 'confident');
+    app.classList.toggle('has-note', namedEarly);
+    arcProgressEl.style.strokeDasharray = '0 100';
+    hintEl.textContent = listening && !namedEarly ? listeningHint() : '';
     return;
   }
 
@@ -302,11 +342,18 @@ function render(reading) {
   // confident "in tune" — that is the part of v1 that misled you.
   const provisional = status === 'live' && reading.settled === false;
 
-  noteNameEl.textContent = NOTE_NAMES[((midi % 12) + 12) % 12];
-  noteOctaveEl.textContent = Math.floor(midi / 12) - 1;
+  showNoteName(midi);
+  // "In tune" is a claim. It is only made once the reading has earned it —
+  // before that the player gets the number, which informs without asserting.
+  // The claim is withheld until the dial has filled, whatever the mode. Modes
+  // that report the instantaneous pitch are not wrong, but a string that is
+  // still gliding is not in tune yet and should not be told it is.
+  const mayClaim = !provisional && shownConfidence > 0.9;
   centsEl.textContent = settling
     ? 'listening…'
-    : inTune ? 'In tune' : `${rounded > 0 ? '+' : '−'}${Math.abs(rounded)} cents`;
+    : inTune && mayClaim
+      ? 'In tune'
+      : `${rounded > 0 ? '+' : '−'}${Math.abs(rounded)} cents`;
   detailEl.textContent = [
     `${reading.frequency.toFixed(1)} Hz`,
     reading.detail,
@@ -319,12 +366,48 @@ function render(reading) {
         ? 'plucked hard — softer settles sooner'
         : '';
 
+  // How settled the reading is, shown as the dial filling rather than as a
+  // number that changes under the user.
+  // Only ever forwards within a note. The underlying trust dips when the fit
+  // re-evaluates, and an indicator that slides backwards is precisely the
+  // fidgeting this is meant to replace — evidence accumulates, so the dial
+  // does too, and it resets when a new note is struck.
+  const confidence = typeof reading.confidence === 'number' ? reading.confidence : 1;
+  shownConfidence = Math.max(shownConfidence, confidence);
+  arcProgressEl.style.strokeDasharray = `${(shownConfidence * 100).toFixed(1)} 100`;
+  app.classList.toggle('confident', shownConfidence >= 0.999 && status !== 'settling');
+
   app.classList.add('has-note');
   app.classList.toggle('provisional', provisional);
   app.classList.toggle('stale', status === 'held');
-  app.classList.toggle('in-tune', inTune && !settling && !provisional);
+  app.classList.toggle('in-tune', inTune && !settling && mayClaim);
   app.classList.toggle('flat', !inTune && !settling && rounded < 0);
   app.classList.toggle('sharp', !inTune && !settling && rounded > 0);
+
+  // One quiet confirmation the first time a string arrives, rather than a
+  // colour that was already green flickering on and off.
+  const confidentlyInTune = inTune && !settling && mayClaim;
+  if (confidentlyInTune && !wasConfidentlyInTune && noteNameEl.animate) {
+    noteNameEl.animate(
+      [{ transform: 'scale(1)' }, { transform: 'scale(1.06)' }, { transform: 'scale(1)' }],
+      { duration: 420, easing: 'cubic-bezier(.22,.61,.36,1)' }
+    );
+  }
+  wasConfidentlyInTune = confidentlyInTune;
+}
+
+function showNoteName(midi) {
+  if (midi === null) return;
+  noteNameEl.textContent = NOTE_NAMES[((midi % 12) + 12) % 12];
+  noteOctaveEl.textContent = Math.floor(midi / 12) - 1;
+}
+
+/** Nearest note to a raw frequency, honouring a chosen string. */
+function noteFor(frequency) {
+  const string = STRINGS.find((s) => s.id === settings.string);
+  if (string && string.midi !== null) return string.midi;
+  if (!frequency) return null;
+  return Math.round(12 * Math.log2(frequency / settings.reference)) + 69;
 }
 
 function listeningHint() {

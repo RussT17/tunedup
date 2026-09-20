@@ -99,6 +99,33 @@ html, body {
   stroke-linecap: round;
   opacity: .5;
 }
+/* Fills as the reading firms up, then fades — the dial charging rather than a
+   progress bar bolted on. Monotonic by construction, so it cannot fidget. */
+.arc-progress {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 0 100;
+  opacity: 0;
+  transition: stroke-dasharray .18s linear, opacity .5s var(--ease), stroke .3s var(--ease);
+}
+.state-listening.has-note .arc-progress { opacity: .9; }
+.state-listening.has-note.confident .arc-progress { opacity: 0; }
+.in-tune .arc-progress { stroke: var(--accent); }
+
+/* The instant acknowledgement: a ring leaving the hub the moment a pluck
+   lands, before anything is known about its pitch. */
+.strike {
+  fill: none;
+  stroke: var(--fg);
+  stroke-width: 2;
+  opacity: 0;
+  transform-box: view-box;
+  transform-origin: 150px 150px;
+  pointer-events: none;
+}
+
 .gauge .tick {
   stroke: var(--dim);
   stroke-width: 2;
@@ -221,6 +248,7 @@ html, body {
 .state-idle { cursor: pointer; }
 
 .settling .note-name { color: var(--muted); }
+.settling .note-octave { color: var(--dim); }
 .settling .cents { color: var(--dim); }
 .settling .needle { opacity: .45; }
 

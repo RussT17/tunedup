@@ -211,14 +211,6 @@ still the weakest: *"it was hard for me to tell."*
   but ambiguous. Options: show nothing until settled, show a confidence ring
   that closes, or show the settled estimate as soon as the fit is trustworthy
   and never before.
-- Needle behaviour: smoothing, settle time, and the ±3 cent in-tune window are
-  all currently guesses. Tune them against how it feels while actually tuning.
-- A clear "this string is done" moment, and something that tracks progress
-  through all six strings without becoming a checklist app.
-- Coach the pluck. A softer pluck has less glide to correct, so the app knowing
-  that and saying so — once, quietly, when it sees a heavy one — is an accuracy
-  improvement disguised as a UI detail.
-
 **Done when** you can tune the guitar without thinking about the app.
 
 ## Phase 3 — Prove it travels

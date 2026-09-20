@@ -30,7 +30,9 @@ rather than deleting them, so the reasoning stays visible.
       so far: the room profile, the target lock, and MPM's first-peak rule. Worth
       adding a continuity check — a ringing string does not change octave
       mid-note, so a reading that jumps one is wrong by construction.
-- [ ] Decide what to do about the first second after a pluck. Every mode is
+- [x] ~~Decide what to do about the first second after a pluck.~~ The note is
+      named at about 200 ms, the number is shown but dimmed, the dial fills as
+      the reading firms up, and "In tune" is withheld until it has filled. Every mode is
       several cents sharp there because the string is; "settling" is honest but
       the user still wants a number.
 
