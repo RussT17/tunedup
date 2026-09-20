@@ -105,6 +105,7 @@ const { samples, sampleRate } = readWav(file);
 console.log(`${path.basename(file)} — ${(samples.length / sampleRate).toFixed(1)} s at ${sampleRate} Hz` +
   (target ? `, target ${options.string.toUpperCase()} = ${target.toFixed(2)} Hz` : ', auto note'));
 
+const tails = [];
 let reported = null;
 for (const mode of MODES) {
   const readings = run(mode.id, samples, sampleRate, target);
@@ -138,7 +139,34 @@ for (const mode of MODES) {
     if (mode.id === 'studio' && index === 0) {
       reported = { note, noteHz, mode: mode.label };
     }
+    // The tail of a note is its settled pitch: the glide scales with amplitude
+    // squared, so by the time the string is at a few percent of its peak the
+    // excess is far under a cent. Measured from the quiet end with no
+    // real-time constraint, this is ground truth for the whole recording.
+    if (mode.id === 'strobe') {
+      const tail = live.filter((e) => e.frame.onsetAge > last.frame.onsetAge * 0.7);
+      if (tail.length >= 5) {
+        const sorted = tail.map((e) => e.reading.frequency).sort((a, b) => a - b);
+        tails.push({ index: index + 1, hz: sorted[sorted.length >> 1], samples: tail.length });
+      }
+    }
   });
+}
+
+if (tails.length) {
+  console.log('\n  Settled pitch measured from each note\'s quiet tail');
+  const nominal = target || reference * Math.pow(2, Math.round(12 * Math.log2(tails[0].hz / reference)) / 12);
+  const midi = Math.round(12 * Math.log2(nominal / reference)) + 69;
+  const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  console.log(`    nominal ${names[((midi % 12) + 12) % 12]}${Math.floor(midi / 12) - 1} = ${nominal.toFixed(3)} Hz at A4 = ${reference}`);
+  for (const tail of tails) {
+    const off = cents(tail.hz, nominal);
+    console.log(`    pluck ${tail.index}: ${tail.hz.toFixed(3)} Hz  ${off >= 0 ? '+' : ''}${off.toFixed(2)} cents`);
+  }
+  if (tails.length > 1) {
+    const offsets = tails.map((t) => cents(t.hz, nominal));
+    console.log(`    spread across plucks: ${(Math.max(...offsets) - Math.min(...offsets)).toFixed(2)} cents`);
+  }
 }
 
 if (reported) {

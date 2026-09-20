@@ -140,18 +140,14 @@ async function openMicrophone() {
   }
 
   const source = audioCtx.createMediaStreamSource(stream);
-  const highpass = audioCtx.createBiquadFilter();   // drop handling rumble / DC
-  highpass.type = 'highpass';
-  highpass.frequency.value = 25;
-  const lowpass = audioCtx.createBiquadFilter();    // drop hiss above anything musical
-  lowpass.type = 'lowpass';
-  lowpass.frequency.value = 3500;
 
   engine = new Engine(audioCtx.sampleRate);
   buildEstimator();
 
+  // Unfiltered into the engine: it does its own filtering, so a replay of an
+  // exported recording behaves exactly as the app did.
   const sink = await createCaptureNode(audioCtx, (block) => engine.push(block));
-  source.connect(highpass).connect(lowpass).connect(sink);
+  source.connect(sink);
 
   // A capture node is only pulled if it reaches the destination; muting keeps
   // the microphone out of the speakers.

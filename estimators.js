@@ -308,7 +308,7 @@ class StrobeEstimator extends Estimator {
 
     const { magnitude, fftSize } = spectrum(this.scratch, size);
     const peaks = [];
-    for (let m = 1; m <= 6; m++) {
+    for (let m = 1; m <= 10; m++) {
       const target = frame.f0 * m;
       if (target > sampleRate / 2.5) break;
       const peak = refinePeak(magnitude, fftSize, sampleRate, target);
@@ -316,17 +316,22 @@ class StrobeEstimator extends Estimator {
     }
     if (!peaks.length) return null;
 
-    // B from how far each partial sits above an exact multiple of the first.
-    const first = peaks.find((p) => p.m === 1);
-    const reference = first ? first.frequency : frame.f0;
-    const estimates = [];
-    for (const p of peaks) {
-      if (p.m < 2) continue;
-      const ratio = p.frequency / (p.m * reference);
-      const B = (ratio * ratio - 1) / (p.m * p.m - 1);
-      if (B > -1e-4 && B < 5e-3) estimates.push(Math.max(0, B));
+    // Inharmonicity from all the partials at once. A stiff string puts partial m
+    // at m·f1·sqrt(1 + B·m²), so 2·ln(f_m / m) is linear in m² with slope B.
+    // Regressing that uses every partial and does not care whether the
+    // fundamental — often the weakest thing on a solid body — was found at all.
+    let B = 0;
+    if (peaks.length >= 3) {
+      let sw = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;
+      for (const p of peaks) {
+        const w = Math.log(1 + p.snr);
+        const x = p.m * p.m;
+        const y = 2 * Math.log(p.frequency / p.m);
+        sw += w; sx += w * x; sy += w * y; sxx += w * x * x; sxy += w * x * y;
+      }
+      const denom = sw * sxx - sx * sx;
+      if (denom) B = Math.max(0, Math.min(5e-3, (sw * sxy - sx * sy) / denom));
     }
-    const B = estimates.length ? median(estimates) : 0;
 
     // Prefer a loud partial, with a nudge towards low ones: they carry less
     // inharmonicity error and are less likely to be a neighbour's harmonic.

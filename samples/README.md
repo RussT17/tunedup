@@ -1,21 +1,56 @@
 # Recordings
 
-Drop real instrument recordings here — they are what the modes get tuned against.
-
-Record them with the app itself: **Trace → Save recording (WAV)**. That captures
-the last 15 seconds exactly as the tuner heard it, through the same microphone,
-filters and sample rate, so a replay reproduces what happened on the phone.
-
-Name them so the intent is obvious: `e2-hard-pluck.wav`, `a2-soft.wav`,
-`g3-flat-then-tuned.wav`.
-
-Replay one through every mode:
+Real recordings are what the tuning modes get validated against. Everything in
+here is replayed with:
 
 ```sh
-node tools/analyse-wav.mjs samples/e2-hard-pluck.wav --string e2
+node tools/analyse-wav.mjs samples/e2-1-reference.wav --string e2
 ```
 
-That prints each mode's reading at 0.5 / 1 / 2 / 3 seconds, how long it tracked
-the string, the worst frame-to-frame jump late in the note (the "went frenetic"
-check), and the glide it measured. It also writes `<name>-trace.html` next to the
-recording — the same trace chart the app shows.
+which prints every mode's reading over time, how long it tracked the string, the
+worst frame-to-frame jump late in the note, the glide it measured, and the
+settled pitch taken from the note's quiet tail. It also writes
+`<name>-trace.html` — the same chart the app shows.
+
+## How to record
+
+Record with the app: **Start → Trace → pluck → Save recording (WAV)**. The panel
+updates live, so it can stay open while you play. That captures the last 15
+seconds of raw microphone audio, before any filtering, so a replay can also try
+different filter choices.
+
+Set the **String** selector to the string you are recording — it goes into the
+filename.
+
+Rules that make the set usable:
+
+- **Do not touch that string's tuning peg** until all of its recordings are
+  done. One ground-truth measurement then applies to the whole set.
+- **Mute the other five strings** (rest a finger or a cloth across them) for
+  recordings 1–5, so each file contains one string only.
+- **Leave two seconds of silence before each pluck** — the tuner needs to see
+  the noise floor to know what silence sounds like.
+- **Keep the phone in one place** for the whole session, wherever you would
+  actually put it while tuning.
+- **Save within 15 seconds** of the pluck, or the buffer will have rolled past it.
+
+## What to record, per string
+
+| # | File | What to play |
+| --- | --- | --- |
+| 1 | `<string>-1-reference.wav` | The *softest* pluck that still rings clearly. Let it ring until you can no longer hear it, or until ~13 s. **This is the ground truth** — the tail of a quiet note is the settled pitch to a fraction of a cent. |
+| 2 | `<string>-2-normal.wav` | A normal pluck, the way you would play while tuning. Let it ring ~6 s. |
+| 3 | `<string>-3-hard.wav` | The hardest pluck you would realistically use. Maximum pitch glide — the case that misleads a tuner most. |
+| 4 | `<string>-4-replucks.wav` | Four normal plucks about 1.5 s apart, never letting the string go quiet. A re-pluck beats against the note still ringing, which is where a wrong-turn bug was already found. |
+| 5 | `<string>-5-pegturn.wav` | Pluck normally, let it settle ~2 s, then **slowly turn the peg flat** by roughly a quarter tone over ~3 s while it rings. Do this one **last** for the string and re-tune afterwards. |
+
+## Two extra recordings for the session
+
+| File | What to play |
+| --- | --- |
+| `room-tone.wav` | ~13 s of silence, phone where you normally put it, nothing played. Characterises the noise floor and any hum. |
+| `open-strum.wav` | All six strings strummed once, left to ring. Tests picking one string out of a chord. |
+
+Six strings × 5, plus those two, is 32 files. Fewer is still useful — recording
+1 for each string is the single most valuable one, since it is the ground truth
+everything else is scored against.

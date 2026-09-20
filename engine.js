@@ -4,16 +4,51 @@ import { PitchDetector } from './pitch.js';
 // audio, tracks the noise floor and note onsets, and runs one MPM pitch
 // estimate per tick. Estimators consume the resulting frames.
 
-const RING_BITS = 20;            // ~1M samples — 21 s at 48 kHz, enough to export a pluck
+const RING_BITS = 17;            // 131072 samples — 2.7 s, covers the longest baseline
 const WINDOW_SIZE = 8192;        // ~170 ms, enough periods for a low B string
 const ENVELOPE_SECONDS = 0.025;
+const TAPE_SECONDS = 15;         // raw audio kept for export
+const HIGHPASS_HZ = 25;          // handling rumble and DC
+const LOWPASS_HZ = 3500;         // hiss above anything musical
+
+/** RBJ biquad, held as persistent state so blocks join without a transient. */
+function biquad(type, frequency, sampleRate, q = Math.SQRT1_2) {
+  const w = (2 * Math.PI * frequency) / sampleRate;
+  const cos = Math.cos(w);
+  const alpha = Math.sin(w) / (2 * q);
+  let b0, b1, b2;
+  if (type === 'highpass') {
+    b0 = (1 + cos) / 2; b1 = -(1 + cos); b2 = (1 + cos) / 2;
+  } else {
+    b0 = (1 - cos) / 2; b1 = 1 - cos; b2 = (1 - cos) / 2;
+  }
+  const a0 = 1 + alpha, a1 = -2 * cos, a2 = 1 - alpha;
+  return {
+    b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0,
+    x1: 0, x2: 0, y1: 0, y2: 0,
+  };
+}
+
+function step(f, x) {
+  const y = f.b0 * x + f.b1 * f.x1 + f.b2 * f.x2 - f.a1 * f.y1 - f.a2 * f.y2;
+  f.x2 = f.x1; f.x1 = x;
+  f.y2 = f.y1; f.y1 = y;
+  return y;
+}
 
 export class Engine {
   constructor(sampleRate) {
     this.sampleRate = sampleRate;
+    // Analysis runs on filtered audio; the tape keeps the raw input, so an
+    // exported recording is the microphone's own signal and a replay can try
+    // different filtering rather than being stuck with today's choice.
     this.ring = new Float32Array(1 << RING_BITS);
     this.ringMask = this.ring.length - 1;
     this.written = 0;
+    this.tape = new Float32Array(Math.round(TAPE_SECONDS * sampleRate));
+    this.taped = 0;
+    this.highpass = biquad('highpass', HIGHPASS_HZ, sampleRate);
+    this.lowpass = biquad('lowpass', LOWPASS_HZ, sampleRate);
 
     this.detector = new PitchDetector(WINDOW_SIZE);
     this.window = new Float32Array(WINDOW_SIZE);
@@ -26,9 +61,14 @@ export class Engine {
   }
 
   push(block) {
-    const { ring, ringMask } = this;
-    for (let i = 0; i < block.length; i++) ring[(this.written + i) & ringMask] = block[i];
+    const { ring, ringMask, tape } = this;
+    for (let i = 0; i < block.length; i++) {
+      const raw = block[i];
+      tape[(this.taped + i) % tape.length] = raw;
+      ring[(this.written + i) & ringMask] = step(this.lowpass, step(this.highpass, raw));
+    }
     this.written += block.length;
+    this.taped += block.length;
   }
 
   /** Copies `target.length` samples ending at `endSample`. False if they have scrolled out. */
@@ -39,12 +79,12 @@ export class Engine {
     return true;
   }
 
-  /** The most recent `seconds` of audio, for exporting a recording. */
+  /** The most recent `seconds` of raw audio, for exporting a recording. */
   snapshot(seconds) {
-    const count = Math.min(Math.round(seconds * this.sampleRate), this.ring.length, this.written);
+    const count = Math.min(Math.round(seconds * this.sampleRate), this.tape.length, this.taped);
     const out = new Float32Array(count);
-    const start = this.written - count;
-    for (let i = 0; i < count; i++) out[i] = this.ring[(start + i) & this.ringMask];
+    const start = this.taped - count;
+    for (let i = 0; i < count; i++) out[i] = this.tape[(start + i) % this.tape.length];
     return out;
   }
 
