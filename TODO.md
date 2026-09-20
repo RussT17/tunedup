@@ -21,14 +21,15 @@ rather than deleting them, so the reasoning stays visible.
 
 ## Generality — not fitting one guitar in one room
 
-- [ ] **Room noise profile.** Learn the spectrum of the room, not just a
-      broadband level: passively, from the gaps between notes, with an explicit
-      "calibrate" affordance as a fallback. Use it to (a) place the high-pass
-      just above the room's low-frequency noise rather than at a fixed 70 Hz,
-      bounded so it can never climb above the string being tuned, (b) require a
-      partial to clear the room's level *in its own band* before being trusted,
-      (c) notch narrowband interferers such as mains hum, (d) tell the user when
-      a room is too noisy to tune in.
+- [ ] **Room profile, remaining pieces.** Learned passively and used to gate the
+      spectrum (done). Still to do: (a) use it in the strobe's partial choice —
+      prefer a partial that clears the room in its own band, which is the case a
+      filter cannot help with, such as mains hum sitting on a partial;
+      (b) subtract noise *power* when estimating amplitudes for the decay fit,
+      which is the one statistically sound subtraction here; (c) notch
+      narrowband interferers; (d) tell the user when a room is too noisy to tune
+      in; (e) show the learned profile in the Trace panel; (f) an explicit
+      "calibrate" control for forcing a re-learn.
 - [ ] **Replace magic constants with measured quantities.** Every threshold
       chosen by looking at data is a chance to overfit. The gate ratios, the
       attack skip, the fade gate, the slew limit and the unwrap tolerance should
@@ -40,9 +41,9 @@ rather than deleting them, so the reasoning stays visible.
       sweep is overfitting, and the sweep is what will say so.
 - [ ] **A second dataset**: another instrument, another room, another phone.
       One guitar is one guitar.
-- [ ] **Restore the range below 65 Hz** via an instrument selection (bass,
-      cello, piano) that sets the range and filtering, rather than the current
-      constant that assumes a guitar.
+- [ ] **Instrument selection** (guitar, bass, cello, piano) to narrow the search
+      range and the expected inharmonicity. No longer needed for *range* — the
+      room profile replaced the fixed cutoff — but still useful as a prior.
 
 ## Features discussed, not yet built
 
@@ -67,11 +68,23 @@ rather than deleting them, so the reasoning stays visible.
 
 ## Known limitations
 
-- Nothing below 65 Hz is detected. Deliberate — see the range section of the
-  README — but it means no bass guitar until the instrument selection lands.
 - All validation is against one guitar, one room, one phone, plus a simulator.
+- Ground truth from `tools/measure-truth.mjs` carries a known bias of about
+  +0.65 cents, measured against synthetic notes: the analysis window still
+  contains a little residual pitch glide. Treat truth as ±1 cent.
+- The truth tool and the strobe estimator agree within 0.6 cents on four
+  strings but differ by 3.4 cents on A2, and D3 measured unstably. Those two
+  are also the two with the shortest tracking. Unresolved.
 
 ## Done
+
+- [x] Room profile replaces the fixed high-pass: each band is judged against
+      what that band normally does, so a low note is admitted exactly where a
+      steady rumble is dropped. The 70 Hz cutoff is gone and the full range is
+      back. On the real samples the bands of a plucked string jump 30 dB while
+      the room's rumble band moves 5.
+- [x] Independent ground truth (`tools/measure-truth.mjs`), sharing no code
+      with the estimators, validated against synthetic notes to 0.7 cents.
 
 - [x] Room rumble at 58 Hz was making soft low strings unreadable; steep
       high-pass at 70 Hz and a target-driven search range.

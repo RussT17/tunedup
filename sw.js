@@ -1,5 +1,5 @@
 // Bump CACHE whenever the shell changes so clients pick up a new build.
-const CACHE = 'tunedup-v6';
+const CACHE = 'tunedup-v7';
 const SHELL = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const SHELL = [
   './pitch.js',
   './engine.js',
   './estimators.js',
+  './room.js',
   './trace.js',
   './capture-worklet.js',
   './manifest.webmanifest',

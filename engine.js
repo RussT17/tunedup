@@ -1,4 +1,5 @@
 import { PitchDetector } from './pitch.js';
+import { RoomProfile } from './room.js';
 
 // Shared front end for every tuning mode: keeps a ring buffer of contiguous
 // audio, tracks the noise floor and note onsets, and runs one MPM pitch
@@ -9,12 +10,13 @@ const WINDOW_SIZE = 8192;        // ~170 ms, enough periods for a low B string
 const ENVELOPE_SECONDS = 0.025;
 const TAPE_SECONDS = 18;         // raw audio kept for export, with headroom
                                  // so a 15 s capture cannot be overwritten mid-save
-// Rooms are full of low-frequency energy — HVAC, traffic, the fridge. It sits
-// between 40 and 70 Hz, below every guitar string, and a gentle filter leaves
-// enough of it to fool a pitch detector into an octave error. Hence a steep
-// fourth-order slope with a cutoff just under the lowest string.
-const HIGHPASS_HZ = 70;
-const HIGHPASS_STAGES = 2;       // two biquads = 24 dB/octave
+// Only DC and subsonic handling noise are filtered by frequency. Room noise is
+// dealt with by RoomProfile, which judges each band against what that band
+// normally does — so a low note is kept where a steady rumble at the same
+// frequency is dropped, and nothing below the lowest string is excluded on
+// principle.
+const HIGHPASS_HZ = 28;
+const HIGHPASS_STAGES = 1;
 const LOWPASS_HZ = 3500;         // hiss above anything musical
 const SEARCH_MARGIN_CENTS = 400; // how far either side of a chosen string to look
 
@@ -59,6 +61,7 @@ export class Engine {
 
     this.detector = new PitchDetector(WINDOW_SIZE);
     this.window = new Float32Array(WINDOW_SIZE);
+    this.room = new RoomProfile(this.detector.fftSize >> 1);
 
     this.noiseFloor = 0.002;
     this.onsetSample = -1;
@@ -82,8 +85,8 @@ export class Engine {
       this.highpass.push(biquad('highpass', cutoff, this.sampleRate));
     }
     const margin = Math.pow(2, SEARCH_MARGIN_CENTS / 1200);
-    this.minFreq = targetHz ? targetHz / margin : 65;
-    this.maxFreq = targetHz ? targetHz * margin : 1400;
+    this.minFreq = targetHz ? targetHz / margin : 27.5;
+    this.maxFreq = targetHz ? targetHz * margin : 2100;
   }
 
   push(block) {
@@ -151,10 +154,15 @@ export class Engine {
     let frequency = 0;
     let clarity = 0;
     if (this.read(this.window)) {
+      // Learn the room whenever nothing is being played; judge against it
+      // whenever something is.
+      const quietEnoughToLearn = !sounding && rms < Math.max(this.noiseFloor * 2, 0.0015);
       const result = this.detector.detect(this.window, sr, {
         minRms: Math.max(this.noiseFloor * 2, 0.0008),
         minFreq: this.minFreq,
         maxFreq: this.maxFreq,
+        room: this.room,
+        learnRoom: quietEnoughToLearn,
       });
       frequency = result.frequency;
       clarity = result.clarity;

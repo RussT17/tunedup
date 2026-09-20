@@ -64,6 +64,8 @@ export class PitchDetector {
       minRms = 0.004,
       minFreq = DEFAULT_MIN_FREQ,
       maxFreq = DEFAULT_MAX_FREQ,
+      room = null,
+      learnRoom = false,
     } = typeof options === 'number' ? { minRms: options } : options;
     const n = this.size;
     const x = this.work;
@@ -93,6 +95,30 @@ export class PitchDetector {
       this.re[i] = this.re[i] * this.re[i] + this.im[i] * this.im[i];
       this.im[i] = 0;
     }
+
+    let retained = 1;
+    if (room) {
+      const bins = m >> 1;
+      if (learnRoom) {
+        room.observe(this.re.subarray(0, bins));
+      } else if (room.ready) {
+        // Keep only the bands carrying more than this room's own noise. The
+        // autocorrelation then sees the note and not the fridge — without
+        // excluding any frequency in advance, so a genuine low note is kept
+        // exactly where a steady rumble is dropped.
+        let before = 0;
+        let after = 0;
+        for (let i = 1; i < bins; i++) {
+          const value = this.re[i];
+          before += value;
+          if (room.admits(i, value)) after += value;
+          else this.re[i] = this.re[m - i] = 0;
+        }
+        if (before > 0) retained = after / before;
+        if (retained < 0.02) return { frequency: 0, clarity: 0, rms };
+      }
+    }
+
     fft(this.re, this.im, true);
     const scale = 1 / m;
 
@@ -101,7 +127,9 @@ export class PitchDetector {
     const nsdf = this.nsdf;
     const total = this.cumPower[n];
     for (let t = minLag; t <= maxLag; t++) {
-      const divisor = this.cumPower[n - t] + total - this.cumPower[t];
+      // m(t) is measured on the unfiltered signal, so scale it by the share of
+      // power the gate kept. Peak positions do not care; the clarity value does.
+      const divisor = (this.cumPower[n - t] + total - this.cumPower[t]) * retained;
       nsdf[t] = divisor > 0 ? (2 * this.re[t] * scale) / divisor : 0;
     }
 
