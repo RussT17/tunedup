@@ -6,7 +6,7 @@ should be if it were built again knowing what that prototype found out.
 Measurements quoted come from that prototype against 32 real recordings of one
 guitar, a randomised synthetic sweep, and an independent ground-truth tool.
 
-Revision 5, after four rounds of design review. Section 12 lists what remains
+Revision 6, after five rounds of design review. Section 12 lists what remains
 uncertain.
 
 ---
@@ -26,7 +26,9 @@ A chromatic tuner running in a browser on a phone, aimed first at guitar.
 | R7 | Never a confident wrong answer | an in-tune claim is never made above ±3 cents |
 
 R7 outranks R1, and it is a statement about *probability*, not about the point
-estimate: §10 turns it into `|cents| + 2σ ≤ 3`. A tuner that occasionally says
+estimate. §10 turns it into `|cents| + 2σ ≤ 3` over a glide-corrected reading
+with σ including σ_d, plus a separate bound on the glide model's applicability —
+the full form matters, and §10 explains why, twice, from experience. A tuner that occasionally says
 nothing is usable; a tuner that occasionally lies is not.
 
 **Out of scope, stated plainly:** polyphony, automatic string identification,
@@ -441,7 +443,7 @@ remains for masking, flux and acquisition.
 It is *more* expensive than reading an FFT bin, not less: a complex multiply per
 input sample per partial, roughly 4.6 Mflop/s for sixteen partials at 48 kHz,
 against O(1) for a bin lookup on an FFT already being computed. It is chosen for
-correctness, and §12.11 establishes that a few Mflop/s is irrelevant. Decimate
+correctness, and §12.12 establishes that a few Mflop/s is irrelevant. Decimate
 the baseband aggressively — only ±f₁/2 is needed — so that only the mix stage
 runs at full rate; a CIC or moving-average decimator makes the post-mix work
 multiplier-free.
@@ -495,9 +497,12 @@ an offset of `f₁`, but the neighbour sits at the *local* spacing
 At m = 12 on a plain string the neighbour lands 37% of the way from the null to
 the next sidelobe peak — back at the bare Hann sidelobe, against the 60 dB
 derived above, and on exactly the high partials §7.3's log-domain weighting says
-dominate the fit. So set the length **per partial**,
-`T_m = 4 / (f_{m+1} − f_m)`, using the B already fitted, bootstrapping from
-`4/f₁` until one is available. This restores the null exactly rather than
+dominate the fit. So set the length **per partial**, from the **mean of the two local spacings**,
+`T_m = 8 / (f_{m+1} − f_{m−1})`, using the B already fitted and bootstrapping
+from `4/f₁` until one is available. Spacings grow with m, so the upper and lower
+neighbours cannot both sit on a null; nulling the upper one alone leaves the
+lower one off by the difference between the spacings, and splitting it halves
+that error for free. This restores the null exactly rather than
 approximately, costs nothing because the mix is re-centred per partial anyway,
 and gives high partials a shorter window and therefore lower latency, which
 suits the partials that decay first. Wound strings barely need it.
@@ -696,12 +701,43 @@ gap its rule exists to close.
 
 So bound the displacement, not the rate:
 
-- **θ is measured, not assumed.** It is the *local* log-slope of the first
-  partial's **power** envelope, `θ = −1 / (d ln P₁/dt)`, which §7.2's heterodyne
-  provides directly and §2.1 justifies (the excess follows amplitude squared, so
-  it decays at the power rate). Taking it locally also sidesteps §9's two-stage
-  decay warning entirely: no global exponential is ever fitted, so the "three
-  times too fast" failure cannot occur.
+- **θ is measured, not assumed** — but measuring it needs a span, a guard and a
+  stated uncertainty, because the obvious implementation diverges on an ordinary
+  note. θ is the log-slope of the first partial's **power** envelope,
+  `θ = −1 / (d ln P₁/dt)`, which §7.2's heterodyne provides directly and §2.1
+  justifies (the excess follows amplitude squared, so it decays at the power
+  rate). For a slope of r dB/s, `θ = 4.34/|r|`.
+
+  Taking that slope *locally* sidesteps §9's two-stage decay warning — no global
+  exponential is ever fitted, so the "three times too fast" failure cannot occur
+  — and taking it locally is exactly what exposes it to beating. §7.2 says a
+  single string's polarisation beating is ordinary and must **not** be gated;
+  the first partial is in that series, so P₁ oscillates, and a deep or quick
+  beat drives its local slope through zero:
+
+  | polarisation beat | slope swing about a −4 dB/s decay | crosses zero |
+  |---|---|---|
+  | 2 dB at 0.5 Hz | ±3.1 dB/s | no |
+  | 3 dB at 1.0 Hz | ±9.4 dB/s | **yes** |
+  | 4 dB at 2.0 Hz | ±25.1 dB/s | **yes** |
+
+  At the crossing θ diverges and then inverts: at −6 dB/s θ is 0.72 s and
+  `d` = 2.2 cents at a modest 3 cents/s chirp; at −1 dB/s, 13 cents; at +0.5 dB/s
+  θ is −8.7 s and `d` is −26 cents, *with the wrong sign*. Since `d` is now
+  subtracted and the needle points at `reading − d`, that is not a widened band
+  but a needle tens of cents from the truth. So:
+
+  - **Span.** Estimate the slope over a window long compared with the
+    polarisation beat period — order 1–2 s — using a robust fit (median or
+    Huber), not a short local difference. The beat is not Gaussian.
+  - **Guard.** Require the envelope to be clearly falling and clamp θ to a
+    physical range. When the guard trips, **hold the last valid θ and inflate
+    σ_d** rather than setting `d` to zero: zeroing it would both leave the
+    reading uncorrected and release the `d ≤ 0.3` clause, so a beating note
+    would silently get an uncorrected number with nothing blocking the claim.
+  - **σ_θ** is the standard error of that robust slope fit, propagated through
+    `σ_d² = (|df/dt|·σ_θ)² + (θ·σ_{df/dt})²`. This was the one variance in the
+    document with an unstated ingredient.
 - **`d = θ·|df/dt|` is a known-sign bias, and its sign must be used.** The
   reading is always *sharp* of settled by `d`; it is never flat by it. An
   earlier revision folded `d` into a symmetric σ, which is safe with respect to
@@ -858,15 +894,34 @@ claim so it does not flicker at the boundary.
 
 **Acknowledgement is a separate channel from the reading**, and this is not a
 trade-off between responsiveness and stability: the app can show that a pluck
-landed within 100 ms and name the note within about 200 ms on guitar — on bass,
-acquisition needs a filled 256 ms window and `sustain` is not entered until the
-integrator settles at ~130 ms, so naming takes about 400 ms — while the number
-takes as long as it needs. Conflating them makes an app feel simultaneously slow and
+landed within 100 ms and name the note within about 200 ms on guitar. On bass
+that becomes roughly 400 ms, because naming comes from acquisition and
+acquisition needs a filled 256 ms window; the integrator's ~130 ms settling runs
+in parallel and does not add to it. Meanwhile the number takes as long as it
+needs. Conflating them makes an app feel simultaneously slow and
 twitchy.
 
-**σ is an acceptance test, not an aspiration.** Against §13's ground truth, plot
-predicted σ against realised |error|, binned by σ — a reliability diagram — and
-require the estimator to be *conservative*. The quantile must match the
+**σ is an acceptance test, not an aspiration.** Plot predicted σ against
+realised |error|, binned by σ — a reliability diagram — and require the
+estimator to be *conservative*.
+
+**It must run on the synthetic sweep, not on the real recordings**, because the
+sweep's pitch is exact by construction and the recordings' ground truth is only
+±1 cent. Testing a sub-cent σ against a ±1 cent reference measures mostly the
+reference: a true σ of 0.2 would show a realised error of √(0.2² + 1²) = 1.02
+and appear to demand a **five-fold** inflation, 0.3 would demand 3.5×. Applied,
+that would push most readings past both `σ < 5` and the in-tune interval, and
+the tuner would show note names where it should show numbers — so the acceptance
+test would either block shipping indefinitely or quietly be loosened until it
+passed, which is worse. The real recordings check bias and realism; the sweep
+calibrates σ.
+
+The same limit applies to R1 itself. The +0.85 cent ground-truth bias cancels
+when two versions of the design are compared, which is what §13 uses it for, but
+it does not cancel against an absolute ±1 cent target — so the real recordings
+cannot verify R1 in absolute terms either. Doing so would need substantially
+better ground truth than ±1 cent, which is achievable offline with longer
+windows and many takes averaged, but is not what §13 currently describes. The quantile must match the
 requirement it protects: R7 is a statement about the tail, k = 2 already admits a
 2.3% Gaussian tail, and a σ built from residuals contaminated by outlier partials
 and beat events has fatter tails than Gaussian. So require conservatism at **p99
@@ -939,23 +994,29 @@ Not decoration; each of these changes what the DSP must accept.
    twenty-three booleans were. §13's fixtures test that each gate fires when it
    should; the complement — a corpus of clean single plucks on which **no gate
    may fire** — is the test that matters for the user experience, and it is new.
-7. **The `beating` gate's discrimination in particular.** Separating ordinary
+7. **The coupling between the beating gate's deliberate tolerance and θ's local
+   estimation.** §7.2 must not gate ordinary polarisation beating, and §8 must
+   measure a local slope on an envelope that beating makes non-monotonic. The
+   span and guard in §8 are the answer on paper; whether a 1–2 s robust slope is
+   both long enough to ride out a 0.5 Hz beat and short enough to track a
+   two-stage decay is not established, and those two requirements pull apart.
+8. **The `beating` gate's discrimination in particular.** Separating ordinary
    single-string polarisation beating from a genuine foreign partial on depth,
    rate and coherence is the right idea; the thresholds are guesses, and erring
    either way is costly — too tight and good plucks are refused, too loose and
    the phase-slew failure returns.
-8. **The IRLS / χ² interaction.** §7.3 orders them so robustification cannot hide
+9. **The IRLS / χ² interaction.** §7.3 orders them so robustification cannot hide
    misfit, but a self-consistent wrong fit still produces a low χ² by
    construction, and that is the residual hole in the σ story.
-9. **The polyphony threshold.** A second NSDF on the unexplained residual is a
+10. **The polyphony threshold.** A second NSDF on the unexplained residual is a
    much better statistic than raw unexplained fraction, but how much coherent
    residual constitutes a strum — on a guitar whose sympathetic strings are
    always ringing a little — is not established.
-10. **Minimum-statistics tracking on a phone microphone with unknown internal
+11. **Minimum-statistics tracking on a phone microphone with unknown internal
    processing.** The method assumes a stationary noise floor beneath a
    non-stationary signal; platform AGC breaks that assumption in a way the method
    cannot see.
-11. **CPU is not the risk; plumbing is.** A 4096-point FFT at 100 frames/s is
+12. **CPU is not the risk; plumbing is.** A 4096-point FFT at 100 frames/s is
    ~15 Mflop/s and heterodyne tracking adds ~5, together low single-digit percent
    of one core. The risks are dropouts, GC pauses, SAB availability and thermal
    throttling — none of which any offline test can see.
@@ -974,7 +1035,10 @@ No change ships without measurement against all four.
 - **Real recordings** — 32 takes across six strings, scored against ground truth
   from a tool sharing no code with the estimators (long windows contained wholly
   inside the note, partial-series fit; ±1 cent with a known +0.85 cent bias,
-  uniform across strings and therefore cancelling in comparisons).
+  uniform across strings and therefore cancelling in comparisons). This harness
+  answers "did that change make it better?" and "does it behave on real audio?";
+  it cannot answer "is σ honest?" or "is R1 met in absolute terms", both of
+  which need either the sweep or better ground truth than it has.
 - **Stitched sessions** — those recordings spliced into whole sessions with
   re-plucks, string changes, silences and an appliance that stops partway, graded
   on glitches rather than accuracy: notes missed, readings invented in silence,
@@ -982,12 +1046,14 @@ No change ships without measurement against all four.
   appeared here and nowhere else.
 - **On-device soak** — a real phone, a real room, a full tuning session with the
   screen on, instrumented for dropouts, callback jitter, CPU and thermal state.
-  The three harnesses above are offline and cannot see any of §12.11.
+  The three harnesses above are offline and cannot see any of §12.12.
 
 Additions required by these revisions:
 
 - a **reliability diagram** for σ (§10), conservative at p99, reporting
-  max(|error|/σ);
+  max(|error|/σ), **run on the synthetic sweep** — the real recordings' ±1 cent
+  ground truth cannot resolve a sub-cent σ, and using it would demand a spurious
+  three- to five-fold inflation;
 - **fixtures for each categorical gate** — a clipped pluck, a strum, a 12-string
   course, a re-pluck engineered to beat, a session with a deliberately stale room
   profile — testing that each gate fires when it should;
