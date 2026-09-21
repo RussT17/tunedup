@@ -1,53 +1,37 @@
-// Bump CACHE whenever the shell changes so clients pick up a new build.
-const CACHE = 'tunedup-v11';
+// Cache-first for the shell, so the tuner opens instantly and works with no
+// network at all. The version string is the cache key: bump it and every old
+// asset is dropped on the next activation.
+const VERSION = 'tunedup-v3';
 const SHELL = [
-  './',
-  './index.html',
-  './styles.css',
-  './app.js',
-  './pitch.js',
-  './engine.js',
-  './estimators.js',
-  './room.js',
-  './trace.js',
-  './capture-worklet.js',
-  './manifest.webmanifest',
-  './icons/icon.svg',
-  './icons/icon-192.png',
-  './icons/icon-512.png',
-  './icons/icon-maskable-512.png',
-  './icons/apple-touch-icon.png',
+  './', './index.html', './styles.css', './app.js', './manifest.webmanifest',
+  './src/capture-worklet.js', './src/worker.js',
+  './src/dsp/engine.js', './src/dsp/fft.js', './src/dsp/window.js', './src/dsp/ring.js',
+  './src/dsp/room.js', './src/dsp/acquire.js', './src/dsp/partials.js', './src/dsp/fit.js',
+  './src/dsp/glide.js', './src/dsp/gates.js', './src/dsp/settle.js', './src/dsp/notes.js',
+  './icons/icon-192.png', './icons/icon-512.png',
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim())
+      .then((keys) => Promise.all(keys.filter((k) => k !== VERSION).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim()),
   );
 });
 
-// Serve from cache for instant offline starts, refresh the copy in the background.
 self.addEventListener('fetch', (event) => {
-  const { request } = event;
-  if (request.method !== 'GET' || new URL(request.url).origin !== location.origin) return;
-
+  if (event.request.method !== 'GET') return;
   event.respondWith(
-    caches.match(request).then((cached) => {
-      const network = fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const copy = response.clone();
-            caches.open(CACHE).then((c) => c.put(request, copy));
-          }
-          return response;
-        })
-        .catch(() => cached || caches.match('./index.html'));
-      return cached || network;
-    })
+    caches.match(event.request).then((hit) => hit || fetch(event.request).then((res) => {
+      if (res.ok && new URL(event.request.url).origin === self.location.origin) {
+        const copy = res.clone();
+        caches.open(VERSION).then((c) => c.put(event.request, copy));
+      }
+      return res;
+    }).catch(() => hit)),
   );
 });

@@ -1,179 +1,96 @@
 # TunedUp
 
-A chromatic instrument tuner that runs in the browser — no install, no account, no
-network after the first load. Open it, play a note, tune.
+A guitar tuner that runs in a browser and tells you how sure it is.
 
-**Live app:** https://russt17.github.io/tunedup/
+**[Open it](https://russt17.github.io/tunedup/)** — hold the button for two
+seconds while the room is quiet, then play a string.
 
-## What it does today
+Holding the button *is* the room measurement. There is no separate calibration
+step, and the two seconds you wait are two seconds the tuner spends learning
+what your room sounds like so it can ignore it. The same control stays
+available while you tune, because rooms change — someone starts a dryer.
 
-- Listens through the device microphone (tap once to grant access; after that it
-  starts listening the moment you open it).
-- Shows the nearest note, and how many cents flat or sharp you are, updating
-  continuously while you turn the peg.
-- Needle turns green and reads *In tune* within ±3 cents. A reading the current
-  mode does not yet trust is shown dimmed and never claims to be in tune.
-- Holds and dims the last reading when the note dies away, so you can look up
-  after plucking.
-- Five selectable detection modes (below), a target-string lock for guitar, and
-  a reference pitch from 415 to 466 Hz. All three are remembered between visits.
-- Installable as a PWA and fully usable offline.
+---
 
-## Why a plucked string needs more than a pitch detector
+## What is unusual about it
 
-A plucked string does not have one pitch. Displacing it raises the average
-tension, tension raises the frequency, and the excess decays away with the
-square of the amplitude envelope. So the note starts sharp and glides down —
-by 5 to 20 cents on a hard pluck, over *seconds*, not milliseconds, because
-that envelope is what a long-sustaining low string is made of.
+**It knows how sure it is, and acts on it.** Every reading carries a σ in
+cents. The tuner shows a number only when σ is small enough to mean something,
+and it says *in tune* only when `|cents| + 2σ ≤ 3` — an interval, not a
+threshold on the point estimate. A tuner that occasionally says nothing is
+usable; a tuner that occasionally lies is not.
 
-Two things follow. Skipping the attack is not enough: at 250 ms a low E is
-still most of the way sharp. And a tuner that averages the recent past reports
-a moving target, which reads as "sharp, then less sharp, then the note dies
-while still looking sharp" — on an unplugged electric the string can run out of
-audible signal before the glide finishes.
+**It corrects the pluck glide instead of waiting it out.** Displacing a string
+raises its tension, so a pluck starts sharp and slides down: +5 cents for a
+soft pluck, +18 to +25 for a hard one. Most tuners let you wait. This one
+measures the decay rate and the pitch slope and subtracts what is left, because
+the two are related exactly for an exponential glide. If it cannot measure them
+it says so in σ rather than quietly showing you a sharp number.
 
-The pitch worth tuning to is the zero-amplitude limit: what the string settles
-to, which is also what a very soft pluck reads. `predict` and `studio`
-estimate that limit directly rather than waiting for it, by fitting
-`y(t) = settled + A·e^(-t/θ)` to the readings and reporting the intercept.
+**It does not need to hear the fundamental.** On an unplugged electric the
+first partial can sit 20 dB below the third. TunedUp fits the string's
+frequency *and* its stiffness from whichever partials it can see, which is why
+it works on the strings that are hardest to tune.
 
-## Detection modes
+**When it won't show a number, it tells you why.** "Too much background noise
+to tune here" is a better answer than a confident wrong one.
 
-| Mode | What it does |
-| --- | --- |
-| `standard` | v1: median of the last 220 ms. Kept as the baseline to compare against. |
-| `sustain` | Skips the first 250 ms and gates against the noise floor rather than a fixed level, so it follows a decaying string much further down. |
-| `predict` | Fits the decay curve to MPM readings and reports the settled pitch. |
-| `strobe` | Locks onto the clearest partial and phase-tracks it against a fixed reference, the way a strobe tuner works. Narrowband, so it keeps hearing quiet low strings, and it corrects for string inharmonicity. |
-| `studio` | Strobe lock feeding the settled-pitch fit. Most accurate in simulation; most moving parts. |
+## How well it works
 
-Against a simulated low E plucked hard (true pitch 14 cents flat, 18 cents of
-glide), measured through the real app:
+| | measured |
+|---|---|
+| settled accuracy, synthetic (pitch exact by construction) | median **0.20 cents**, p90 1.02 |
+| settled accuracy, 32 real recordings | median **0.90 cents**, p90 3.2 |
+| false "in tune" beyond 3 cents | **0 of 337** claims |
+| time to a usable reading | median 520 ms, p90 860 ms |
+| tracking duration after one pluck | 0.9–2.8 s |
+| stitched sessions: wrong strings, readings in silence, jumps | **0, 0, 0** in 3587 readings |
 
-```
-mode       @1.0s      @2.0s      @3.5s
-standard   +7 cents   −4 cents   −11 cents
-sustain    +7 cents   In tune    −11 cents
-predict    +6 cents   −17 cents  −16 cents
-strobe     In tune    −7 cents   −11 cents
-studio     In tune    −14 cents  −14 cents      ← true answer, held from 2 s
-```
+Where it is weakest: a softly plucked low E goes quiet to the tuner after about
+a second, against a 4-second goal. See [DESIGN.md §12](DESIGN.md).
 
-`node tools/simulate-guitar.mjs` runs the full comparison across all six
-strings, plus a peg-turn test that checks the reading still tracks a string
-being tuned in real time.
+## Running the checks
 
-## The trace view
-
-**Trace** (under the Start button) plots the last pluck: every frame the pitch
-detector produced as recessive dots, the reading the tuner actually showed as a
-line, and the fitted decay curve with the pitch it extrapolates to. A signal-level
-strip shares the time axis below. Touch or hover anywhere on it for the value at
-that instant.
-
-It is the fastest way to see *why* a mode did something — a reading that drifts,
-a fit that over-extrapolates, or a string that stopped being heard are all
-obvious in the plot and invisible in the number.
-
-**Record 15 s** captures raw microphone audio and downloads it when the countdown
-finishes, so a recording session is tap-play-repeat with no timing by hand. See
-`samples/README.md` for the recording protocol and for replaying files through
-every mode with `tools/analyse-wav.mjs` — that replay is how the wrong-turn bug
-in the phase unwrapper was found, on the second pluck of a still-ringing string.
-
-## Frequency range, and why it is not the whole piano
-
-The front end high-passes at 70 Hz with a fourth-order slope, and the pitch
-search runs from 65 Hz up. That is a deliberate narrowing to the guitar's range,
-forced by real recordings: rooms are full of energy between 40 and 70 Hz — HVAC,
-traffic, a fridge — and in `samples/room-tone.wav` a 58 Hz rumble is the loudest
-thing present. On a softly plucked A string it was *louder than the note*, and a
-gentle 25 Hz filter left enough of it that the detector locked onto 55 Hz, half
-of A2, because that period fits both the rumble and the string. Tuning anything
-below a guitar's low E means lowering `HIGHPASS_HZ` in `engine.js` and accepting
-that noise back.
-
-Selecting a target string narrows both further — the high-pass moves to 70% of
-the target and the search to ±400 cents around it — which is what makes a quiet
-low string readable on a noisy floor.
-
-## Target string lock
-
-Selecting a string (rather than `Auto`) tells the tuner what you are aiming at.
-It keeps the display on that note however far out of tune the string is, rejects
-anything more than 300 cents away as noise or a neighbouring string, and gives
-`strobe` its reference frequency without needing to identify the note first.
-
-## How the underlying pitch detection works
-
-`pitch.js` implements the McLeod Pitch Method (MPM). For each ~170 ms window of
-audio it computes the normalised square difference function
+Nothing ships without all four harnesses. `npm run check` runs the first three.
 
 ```
-n(τ) = 2·r(τ) / m(τ)
+npm run score     # 32 real recordings against independent ground truth
+npm run sweep     # randomised synthetic guitar: absolute accuracy, sigma calibration
+npm run session   # recordings stitched into whole sessions: glitches, not accuracy
+npm run browser   # the real app in a real browser with faked audio
 ```
 
-where `r(τ)` is the autocorrelation at lag τ and `m(τ)` is the summed power of the
-two overlapping windows. The autocorrelation is computed with an FFT
-(Wiener–Khinchin), which keeps a full analysis at about 1.5 ms of CPU per frame —
-cheap enough to run 25 times a second on a phone.
-
-The period is taken from the *first* NSDF peak that reaches 90% of the tallest
-peak, which is what keeps the reading off the octave above or below, and the peak
-is refined by parabolic interpolation for sub-cent resolution. Readings are
-accepted only above a clarity threshold, and the displayed value is the median of
-the readings from the last 220 ms.
-
-On synthetic tones the error stays under half a cent from 41 Hz to 880 Hz, including
-signals with a missing fundamental. That is the floor the modes above build on; the rest is
-deciding which number a real, decaying, inharmonic string should report.
-
-## Running it locally
-
-It is a static site with no build step:
-
-```sh
-npx http-server -p 8080 .    # then open http://localhost:8080
-```
-
-Microphone access needs a secure context, so use `localhost` or https.
-
-Check the detector against synthetic tones, and the modes against synthetic
-guitar plucks:
-
-```sh
-node tools/test-pitch.mjs                                   # detector vs synthetic tones
-node tools/simulate-guitar.mjs                              # modes vs synthetic plucks
-node tools/analyse-wav.mjs samples/e2.wav --string e2       # modes vs a real recording
-```
-
-Regenerate the app icons after changing `tools/make-icons.py`:
-
-```sh
-python3 tools/make-icons.py
-```
-
-## Deployment
-
-Pushing to `main` publishes the site with the workflow in
-`.github/workflows/deploy.yml`. It needs **Settings → Pages → Source → GitHub
-Actions** enabled once on the repository.
-
-Bump `CACHE` in `sw.js` when shipping changes so installed copies pick them up.
+Each answers a different question and they are not interchangeable. The real
+recordings answer *did that change make it better?* The sweep is the only one
+that can answer *is σ honest?*, because its pitch is exact while the
+recordings' ground truth is only ±1 cent — testing a sub-cent σ against a
+±1 cent reference measures mostly the reference. The stitched sessions grade
+glitchiness, and every failure ever reported from real use showed up there and
+nowhere else. The browser test measures the plumbing, which is the actual risk.
 
 ## Layout
 
-| File | Purpose |
-| --- | --- |
-| `index.html` | Markup and the SVG meter |
-| `styles.css` | All styling and the colour states |
-| `app.js` | Mic capture, controls, note maths, UI |
-| `engine.js` | Ring buffer, noise floor, onset detection, per-tick frames |
-| `estimators.js` | The five detection modes and the string table |
-| `capture-worklet.js` | AudioWorklet feeding contiguous audio to the engine |
-| `pitch.js` | MPM pitch detection and spectrum helpers |
-| `sw.js`, `manifest.webmanifest` | PWA shell and offline cache |
-| `trace.js` | The trace chart (shared by the app and the replay tool) |
-| `tools/` | Icon generator, detector test, pluck simulator, WAV replay |
-| `samples/` | Real recordings to test against |
+```
+index.html  app.js  styles.css    the UI
+src/capture-worklet.js            copies audio, and nothing else
+src/worker.js                     a shell around the engine
+src/dsp/                          all of the signal processing, no DOM
+  engine.js     the pipeline, assembled
+  room.js       per-bin noise floor: minimum statistics + the held button
+  acquire.js    which note is this? (gated NSDF)
+  partials.js   exactly what frequency? (per-partial heterodyne)
+  fit.js        f1 and stiffness together, from whatever partials survive
+  glide.js      how much of the pluck's sharpness is left
+  settle.js     combining successive readings without lagging a peg turn
+  gates.js      the eight named ways a reading can be invalid
+tools/                            the harnesses above
+samples/                          32 recordings + measured ground truth
+DESIGN.md                         why the pipeline is shaped this way
+```
+
+`src/dsp` has no `AudioContext` and no DOM in it. That is the only reason any
+of it can be measured offline.
+
+## Credits
+
+Built with [Claude Code](https://claude.com/claude-code).

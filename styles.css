@@ -1,400 +1,192 @@
+/* TunedUp. One screen, read at arm's length, in a room with the lights down. */
+
 :root {
-  --bg: #0b0d10;
-  --bg-lift: #14181e;
-  --fg: #f2f5f7;
-  --muted: #7b848f;
-  --dim: #3a424c;
-  --accent: #3ddc97;
-  --warn: #f0b429;
-  --flat: #6aa8ff;
-  --sharp: #ff8a6a;
-  --ease: cubic-bezier(.22,.61,.36,1);
+  --bg: #101418;
+  --surface: #171d23;
+  --line: #2a333d;
+  --text: #eef3f7;
+  --muted: #8c9aa8;
+  --accent: #6aa8ff;   /* the needle: one colour, always */
+  --good: #3ddc97;     /* in tune */
+  --warn: #f0b66b;     /* something to say */
+  --radius: 14px;
 }
 
-* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #eef2f6; --surface: #ffffff; --line: #c3cedb;
+    --text: #0f161d; --muted: #55636f;
+    --accent: #2b6fd6; --good: #12855c; --warn: #9a5b00;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101418; --surface: #171d23; --line: #2a333d;
+  --text: #eef3f7; --muted: #8c9aa8;
+  --accent: #6aa8ff; --good: #3ddc97; --warn: #f0b66b;
+}
+
+* { box-sizing: border-box; }
 
 html, body {
-  margin: 0;
-  height: 100%;
-  background: var(--bg);
-  color: var(--fg);
-  font-family: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  font-variant-numeric: tabular-nums;
+  margin: 0; padding: 0; height: 100%;
+  background: var(--bg); color: var(--text);
+  font: 400 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
-  user-select: none;
 }
+
+body { touch-action: manipulation; -webkit-user-select: none; user-select: none; }
 
 #app {
   min-height: 100%;
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  gap: 8px;
-  padding: max(12px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
-  max-width: 520px;
-  margin: 0 auto;
-  text-align: center;
+  min-height: 100dvh;
+  display: flex; flex-direction: column;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
 }
 
-/* ---------- top bar ---------- */
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.wordmark {
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
+.screen { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; }
+.screen[hidden] { display: none; }
 
-/* ---------- readout ---------- */
-.stage {
-  display: grid;
-  gap: 20px;
-  align-content: center;
+h1 { margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -0.01em; }
+
+/* ---- hold to start ---------------------------------------------------- */
+
+.hold {
+  position: relative; overflow: hidden;
+  width: min(240px, 66vw); aspect-ratio: 1;
+  border: none; border-radius: 50%;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--line);
+  color: var(--text); font: inherit; font-size: 18px; font-weight: 500;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: transform 120ms ease, box-shadow 120ms ease;
 }
-.readout {
-  display: grid;
-  gap: 4px;
+.hold:active { transform: scale(0.98); }
+.hold.holding { box-shadow: inset 0 0 0 2px var(--accent); }
+.hold.done { box-shadow: inset 0 0 0 2px var(--good); }
+
+.hold-fill {
+  position: absolute; inset: 0;
+  background: var(--accent); opacity: 0.22;
+  transform: scaleY(0); transform-origin: bottom;
+  transition: transform 80ms linear;
 }
+.hold.done .hold-fill { background: var(--good); }
+.hold-label { position: relative; display: block; padding: 0 24px; }
+
+.hint { margin: 0; color: var(--muted); font-size: 15px; text-align: center; max-width: 30ch; }
+.error { margin: 0; color: var(--warn); font-size: 15px; text-align: center; max-width: 34ch; }
+
+/* ---- the note --------------------------------------------------------- */
+
+.note-row { display: flex; align-items: baseline; gap: 4px; min-height: 100px; }
 .note {
-  line-height: .9;
-  height: 112px;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
+  font-size: 92px; font-weight: 300; line-height: 1;
+  letter-spacing: -0.03em; font-variant-numeric: tabular-nums;
+  transition: color 160ms ease;
 }
-.note-name {
-  font-size: 108px;
-  font-weight: 600;
-  letter-spacing: -.03em;
-  color: var(--dim);
-  transition: color .25s var(--ease);
+.note.good { color: var(--good); }
+.note.idle { color: var(--line); }
+.octave { font-size: 28px; font-weight: 300; color: var(--muted); }
+
+/* ---- the meter -------------------------------------------------------- */
+
+.meter { position: relative; width: min(520px, 100%); }
+
+.meter-track {
+  position: relative; height: 64px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: inset 0 0 0 1px var(--line);
+  overflow: hidden;
 }
-.note-octave {
-  font-size: 30px;
-  font-weight: 500;
-  color: var(--muted);
-  margin-left: 4px;
-  transform: translateY(-6px);
+
+/* The in-tune zone. It LIGHTS UP rather than recolouring the needle, so the
+   state is carried by brightness and position and not by hue alone -- about
+   one man in twelve cannot use a red/green tuner. */
+.meter-target {
+  position: absolute; top: 0; bottom: 0; left: 50%;
+  width: 12%; transform: translateX(-50%);
+  border-left: 1px solid var(--line); border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  transition: background 180ms ease;
 }
+/* Ticks every 10 cents, so the scale is readable without counting pixels. */
+.meter-ticks { position: absolute; inset: 0; pointer-events: none; }
+.meter-ticks i {
+  position: absolute; top: 0; width: 1px; height: 9px;
+  background: var(--line);
+}
+.meter-ticks i.major { height: 15px; }
+.meter.good .meter-target { background: color-mix(in srgb, var(--good) 22%, transparent); }
+
+/* The uncertainty band: how precisely the tuner actually knows the number. */
+.meter-band {
+  position: absolute; top: 8px; bottom: 8px; left: 50%;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  transform: translateX(-50%) scaleX(0);
+  transition: transform 120ms ease-out, width 120ms ease-out, left 120ms ease-out;
+  opacity: 0;
+}
+
+.meter-needle {
+  position: absolute; top: 4px; bottom: 4px; left: 50%;
+  width: 4px; margin-left: -2px; border-radius: 2px;
+  background: var(--accent);
+  transition: left 110ms cubic-bezier(.22,.61,.36,1);
+  opacity: 0;
+}
+.meter.live .meter-needle, .meter.live .meter-band { opacity: 1; }
+.meter.good .meter-needle { background: var(--good); }
+
+.meter-scale {
+  display: flex; justify-content: space-between;
+  padding: 0 2px;
+  margin-top: 8px; color: var(--muted); font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- the number ------------------------------------------------------- */
+
+.cents-row { display: flex; align-items: baseline; gap: 10px; min-height: 42px; }
 .cents {
-  font-size: 19px;
-  font-weight: 500;
-  color: var(--muted);
-  min-height: 26px;
-  transition: color .25s var(--ease);
+  font-size: 34px; font-weight: 400; font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
+.direction { color: var(--muted); font-size: 16px; }
 
-/* ---------- gauge ---------- */
-.gauge-wrap { display: grid; gap: 10px; }
-.gauge { width: 100%; height: auto; overflow: visible; }
+.status { margin: 0; min-height: 22px; color: var(--muted); font-size: 15px; text-align: center; max-width: 34ch; }
+.status.warn { color: var(--warn); }
 
-.gauge .arc {
-  fill: none;
-  stroke: var(--dim);
-  stroke-width: 2;
-  stroke-linecap: round;
-  opacity: .5;
-}
-/* Fills as the reading firms up, then fades — the dial charging rather than a
-   progress bar bolted on. Monotonic by construction, so it cannot fidget. */
-.arc-progress {
-  fill: none;
-  stroke: var(--muted);
-  stroke-width: 2.5;
-  stroke-linecap: round;
-  stroke-dasharray: 0 100;
-  opacity: 0;
-  transition: stroke-dasharray .18s linear, opacity .5s var(--ease), stroke .3s var(--ease);
-}
-.state-listening.has-note .arc-progress { opacity: .9; }
-.state-listening.has-note.confident .arc-progress { opacity: 0; }
-.in-tune .arc-progress { stroke: var(--accent); }
-
-/* The instant acknowledgement: a ring leaving the hub the moment a pluck
-   lands, before anything is known about its pitch. */
-.strike {
-  fill: none;
-  stroke: var(--fg);
-  stroke-width: 2;
-  opacity: 0;
-  transform-box: view-box;
-  transform-origin: 150px 150px;
+/* An acknowledgement that a note was heard, independent of the reading: R4
+   says this arrives inside 100 ms whether or not there is a number yet. */
+@keyframes ack { from { opacity: 0.5; } to { opacity: 0; } }
+.ack::after {
+  content: ""; position: absolute; inset: 0 0 26px; border-radius: var(--radius);
+  background: var(--accent); opacity: 0;
+  animation: ack 320ms ease-out;
   pointer-events: none;
 }
 
-.gauge .tick {
-  stroke: var(--dim);
-  stroke-width: 2;
-  stroke-linecap: round;
-}
-.gauge .tick.major { stroke: var(--muted); stroke-width: 2.5; }
-.gauge .tick.center { stroke: var(--muted); stroke-width: 3; }
-.gauge .tick-label {
-  fill: var(--dim);
-  font-size: 12px;
-  font-weight: 600;
-  text-anchor: middle;
-}
+/* ---- controls --------------------------------------------------------- */
 
-.needle {
-  transform-box: view-box;
-  transform-origin: 150px 150px;
+.controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.ghost {
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 9px 16px; font: inherit; font-size: 14px;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
-.needle line {
-  stroke: var(--dim);
-  stroke-width: 5;
-  stroke-linecap: round;
-  transition: stroke .25s var(--ease);
-}
-.needle circle {
-  fill: var(--dim);
-  transition: fill .25s var(--ease);
-}
-.target {
-  fill: var(--dim);
-  opacity: .5;
-  transition: fill .25s var(--ease), opacity .25s var(--ease), r .2s var(--ease);
-}
+.ghost:active { color: var(--text); border-color: var(--accent); }
+.ghost.holding { color: var(--accent); border-color: var(--accent); }
 
-.hint {
-  font-size: 14px;
-  color: var(--dim);
-  min-height: 20px;
-  opacity: 0;
-  transition: opacity .3s var(--ease);
-}
-
-/* ---------- footer ---------- */
-.footer { display: grid; gap: 12px; justify-items: center; width: 100%; }
-.detail {
-  font-size: 13px;
-  color: var(--dim);
-  min-height: 18px;
-  letter-spacing: .02em;
-}
-
-.controls {
-  display: flex;
-  gap: 8px;
-  justify-content: center;
-  width: 100%;
-}
-.chip {
-  display: grid;
-  gap: 4px;
-  justify-items: center;
-  flex: 1 1 0;
-  min-width: 0;
-}
-.chip-label {
-  font-size: 10px;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-  color: var(--dim);
-}
-.chip select {
-  appearance: none;
-  width: 100%;
-  border: 0;
-  border-radius: 999px;
-  padding: 9px 10px;
-  background: var(--bg-lift);
-  color: var(--fg);
-  font: inherit;
-  font-size: 13px;
-  text-align: center;
-  text-align-last: center;
-  cursor: pointer;
-}
-.chip select:active { background: #1c222a; }
-
-.blurb {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--dim);
-  max-width: 42ch;
-  min-height: 36px;
-}
-.start {
-  appearance: none;
-  border: 0;
-  border-radius: 999px;
-  padding: 16px 40px;
-  font: inherit;
-  font-size: 17px;
-  font-weight: 600;
-  color: #07110c;
-  background: var(--accent);
-  cursor: pointer;
-  transition: transform .15s var(--ease), opacity .2s var(--ease), background .2s var(--ease);
-}
-.start:active { transform: scale(.97); }
-.error {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.45;
-  color: var(--warn);
-  max-width: 34ch;
-}
-
-/* ---------- states ---------- */
-/* Idle: the whole screen starts the tuner, so nothing on it claims to be tappable
-   except the one button that is. */
-.state-idle { cursor: pointer; }
-
-.settling .note-name { color: var(--muted); }
-.settling .note-octave { color: var(--dim); }
-.settling .cents { color: var(--dim); }
-.settling .needle { opacity: .45; }
-
-/* Shown, but not yet trusted: readable, never green. */
-.provisional .note-name,
-.provisional .cents,
-.provisional .needle { opacity: .6; }
-
-.start.ghost {
-  background: transparent;
-  color: var(--muted);
-  box-shadow: inset 0 0 0 1.5px #232a33;
-  font-weight: 500;
-}
-.state-error .start { display: none; }
-
-.state-listening .hint { opacity: 1; }
-/* The hint stays visible when it has something to say — a settling note or a
-   pluck heavy enough to be worth mentioning. */
-.state-listening.has-note .hint:empty { opacity: 0; }
-
-.has-note .note-name,
-.has-note .cents { color: var(--fg); }
-.has-note .needle line { stroke: var(--fg); }
-.has-note .needle circle { fill: var(--fg); }
-
-.flat .cents { color: var(--flat); }
-.flat .needle line { stroke: var(--flat); }
-.flat .needle circle { fill: var(--flat); }
-
-.sharp .cents { color: var(--sharp); }
-.sharp .needle line { stroke: var(--sharp); }
-.sharp .needle circle { fill: var(--sharp); }
-
-.in-tune .note-name,
-.in-tune .cents { color: var(--accent); }
-.in-tune .needle line { stroke: var(--accent); }
-.in-tune .needle circle { fill: var(--accent); }
-.in-tune .target { fill: var(--accent); opacity: 1; r: 6; }
-
-.stale .note-name,
-.stale .note-octave,
-.stale .cents,
-.stale .detail { opacity: .38; }
-.stale .needle { opacity: .38; }
-
-/* ---------- trace panel ---------- */
-.actions { display: flex; align-items: center; gap: 4px; flex-direction: column; }
-.link {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 13px;
-  padding: 8px 14px;
-  border-radius: 10px;
-  cursor: pointer;
-}
-.link:active { background: var(--bg-lift); }
-
-.panel {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  background: var(--bg);
-  overflow-y: auto;
-  padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
-  display: grid;
-  gap: 14px;
-  align-content: start;
-  max-width: 520px;
-  margin: 0 auto;
-}
-.panel[hidden] { display: none; }
-.panel-top { display: flex; align-items: center; justify-content: space-between; }
-.panel-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: .1em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.trace-chart {
-  width: 100%;
-  height: auto;
-  background: var(--bg);
-  touch-action: pan-y;
-}
-.trace-readout {
-  margin: 0;
-  min-height: 18px;
-  font-size: 12px;
-  color: var(--muted);
-  text-align: center;
-}
-.trace-stats {
-  margin: 0;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 6px 16px;
-  font-size: 13px;
-}
-.trace-stats dt { color: var(--dim); }
-.trace-stats dd { margin: 0; color: var(--fg); text-align: right; font-variant-numeric: tabular-nums; }
-.record { display: grid; gap: 10px; justify-items: center; width: 100%; }
-.record-bar {
-  width: min(260px, 80%);
-  height: 4px;
-  border-radius: 999px;
-  background: var(--bg-lift);
-  overflow: hidden;
-}
-.record-bar[hidden] { display: none; }
-.record-bar span {
-  display: block;
-  height: 100%;
-  width: 0;
-  background: var(--sharp);
-  border-radius: 999px;
-}
-.save.armed { background: var(--sharp); color: #1a0a05; }
-
-.save {
-  appearance: none;
-  border: 0;
-  border-radius: 999px;
-  padding: 14px 28px;
-  font: inherit;
-  font-size: 15px;
-  font-weight: 600;
-  color: #07110c;
-  background: var(--accent);
-  cursor: pointer;
-  justify-self: center;
-}
-.save:active { transform: scale(.98); }
-.panel-note {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--dim);
-  text-align: center;
+@media (max-height: 620px) {
+  .note { font-size: 68px; }
+  .note-row { min-height: 72px; }
+  .screen { gap: 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * { transition-duration: .01ms !important; }
+  * { transition-duration: 1ms !important; animation-duration: 1ms !important; }
 }

@@ -1,0 +1,17 @@
+{
+  "name": "tunedup",
+  "private": true,
+  "type": "module",
+  "description": "A guitar tuner that tells you how sure it is.",
+  "scripts": {
+    "score": "node tools/score.mjs --compare tools/baseline.json",
+    "sweep": "node tools/sweep.mjs 120",
+    "session": "node tools/session.mjs 1 6",
+    "browser": "node tools/browser-test.mjs samples/g3-2-normal.wav",
+    "truth": "node tools/measure-truth.mjs",
+    "check": "npm run score && npm run sweep && npm run session"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}
