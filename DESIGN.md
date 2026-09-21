@@ -6,7 +6,7 @@ should be if it were built again knowing what that prototype found out.
 Measurements quoted come from that prototype against 32 real recordings of one
 guitar, a randomised synthetic sweep, and an independent ground-truth tool.
 
-Revision 6, after five rounds of design review. Section 12 lists what remains
+Revision 7, after six rounds of design review. Section 12 lists what remains
 uncertain.
 
 ---
@@ -505,7 +505,11 @@ lower one off by the difference between the spacings, and splitting it halves
 that error for free. This restores the null exactly rather than
 approximately, costs nothing because the mix is re-centred per partial anyway,
 and gives high partials a shorter window and therefore lower latency, which
-suits the partials that decay first. Wound strings barely need it.
+suits the partials that decay first. Wound strings barely need it. The
+fundamental has no lower neighbour: take **`f₀ = 0`**, which gives `T₁ = 8/f₂` —
+48.5 ms on a low E, identical to the ideal one-sided `4/(f₂ − f₁)` because
+`f₂ ≈ 2f₁` to within B. One convention rather than a special case, and no array
+underrun at the first partial.
 
 *Re-centring.* The mix frequency must be re-centred as the estimate improves, or
 the partial drifts onto the skirt where group delay varies and the phase slope
@@ -903,7 +907,14 @@ twitchy.
 
 **σ is an acceptance test, not an aspiration.** Plot predicted σ against
 realised |error|, binned by σ — a reliability diagram — and require the
-estimator to be *conservative*.
+estimator to be *conservative*. The quantile must match the requirement it
+protects: R7 is a statement about the tail, k = 2 already admits a 2.3% Gaussian
+tail, and a σ built from residuals contaminated by outlier partials and beat
+events has fatter tails than Gaussian. So require conservatism at **p99 or
+better**, and report **max(|error|/σ)** alongside the percentile — a single
+catastrophic ratio is exactly what R7 forbids and exactly what a percentile
+hides. Shipping is gated on that plot, and it will also settle the correlation
+correction of §7.2 empirically.
 
 **It must run on the synthetic sweep, not on the real recordings**, because the
 sweep's pitch is exact by construction and the recordings' ground truth is only
@@ -921,14 +932,7 @@ when two versions of the design are compared, which is what §13 uses it for, bu
 it does not cancel against an absolute ±1 cent target — so the real recordings
 cannot verify R1 in absolute terms either. Doing so would need substantially
 better ground truth than ±1 cent, which is achievable offline with longer
-windows and many takes averaged, but is not what §13 currently describes. The quantile must match the
-requirement it protects: R7 is a statement about the tail, k = 2 already admits a
-2.3% Gaussian tail, and a σ built from residuals contaminated by outlier partials
-and beat events has fatter tails than Gaussian. So require conservatism at **p99
-or better**, and report **max(|error|/σ)** alongside the percentile — a single
-catastrophic ratio is exactly what R7 forbids and exactly what a percentile
-hides. Shipping is gated on that plot, and it will also settle the correlation
-correction of §7.2 empirically.
+windows and many takes averaged, but is not what §13 currently describes.
 
 ---
 
@@ -958,7 +962,7 @@ Not decoration; each of these changes what the DSP must accept.
 
 1. **How well the per-partial null actually holds.** §7.2 now specifies the
    filter's type, length and re-centring, so what remains open is narrower and
-   sharper: `T_m = 4/(f_{m+1} − f_m)` restores the null only as well as B̂ is
+   sharper: `T_m = 8/(f_{m+1} − f_{m−1})` restores the null only as well as B̂ is
    known, and B̂ comes from the same partials the null is protecting — a
    circularity that is bootstrapped from `4/f₁` but not analysed. On a plain
    string at m = 12 the difference between a correct and an incorrect null is
@@ -999,7 +1003,13 @@ Not decoration; each of these changes what the DSP must accept.
    measure a local slope on an envelope that beating makes non-monotonic. The
    span and guard in §8 are the answer on paper; whether a 1–2 s robust slope is
    both long enough to ride out a 0.5 Hz beat and short enough to track a
-   two-stage decay is not established, and those two requirements pull apart.
+   two-stage decay is not established. The more binding conflict is with time
+   itself: θ̂ needs 1–2 s of envelope before it means anything, while `d` is
+   largest in the first second after the pluck — so over the window where the
+   correction matters most, the quantity it is built from is least trustworthy.
+   §8's guard turns that into a refusal rather than a wrong number, which is the
+   right failure, but it means the correction may simply be unavailable exactly
+   when it is wanted.
 8. **The `beating` gate's discrimination in particular.** Separating ordinary
    single-string polarisation beating from a genuine foreign partial on depth,
    rate and coherence is the right idea; the thresholds are guesses, and erring
