@@ -1193,6 +1193,28 @@ allowing downward re-locks freely makes it descend to f/2, f/4. After the lock
 window f1 comes from the fit, which follows a peg turn continuously, and a new
 note arrives through the onset detector.
 
+**Display continuity is a requirement the design does not have, and it was the
+worst thing about the app.** §10 specifies ballistics -- a dead band, critical
+damping, hysteresis on the in-tune claim -- but says nothing about the
+show/hide decision itself, which is a bare threshold on σ. Measured at 50 Hz in
+the browser, a low E produced **five separate reading spans of 0.02 to 0.18
+seconds, with four gaps between them, inside one note**: the number appearing
+and vanishing five times in a second and a half. Every accuracy harness passed
+it, and the corpus statistic that should have caught it -- median hold time --
+reported 1.4 s, the same figure a single steady span would give.
+
+Three additions fix it, and all three are honest about what they do: hysteresis
+on the show decision (σ < 5 to start, < 8 to continue), a warm-up so a two-frame
+excursion cannot flash a number, and a 200 ms hold that bridges a gap with σ
+growing by age. The load-bearing one is a distinction the gate taxonomy of §10
+does not draw: **`room` is the one hard gate a held reading may bridge**.
+`clipping`, `polyphony` and `octave` each assert the reading itself is wrong.
+`room` asserts only that fewer than two partials clear the mask *right now* --
+correct at note onset, and a transient a tenth of a second after the same note
+was measured from five partials. Every one of the eight sub-200 ms spans in the
+corpus ended on that gate. Across 48 notes: blinks 18 → 9, spans under 200 ms
+16 → 4, median span 0.35 s → 0.67 s, for 0.01 cents of settled accuracy.
+
 **Still open, unmeasured.** §12.1 (the per-partial null's accuracy against B̂),
 §12.2 (whether the clarity thresholds inherited from McLeod mean what he meant
 on a gated, Hann-windowed frame — they were set empirically instead), §12.8

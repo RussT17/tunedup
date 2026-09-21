@@ -39,6 +39,22 @@ const ONSET_RISE = 3;           // to join the note: 4.8 dB over the pre-onset l
 const ONSET_KEEP = 1.2;         // to stay in it: 0.8 dB         // to stay in it: 1.8 dB           // a partial must beat its own pre-onset level by 6 dB
 const DYNAMIC_RANGE_DB = 50;    // a partial further below the loudest than the
                                 // analysis can separate is not measurable (§7.2)
+const ADMIT_KEEP = 0.45;        // a partial already tracked is held to a
+                                // threshold 3.5 dB below the one to acquire it
+const SHOW_SIGMA = 5;           // to start showing a number
+const KEEP_SIGMA = 8;           // to keep showing one already on screen
+// Display continuity. All three were swept against a metric the accuracy
+// harnesses cannot express: how many times the number blinks off and back
+// inside ONE note (tools/score.mjs `blinks`, `spansUnder200ms`, `medSpanS`).
+// A median hold time reports a steady reading and five flashes with gaps as
+// the same number, and the difference is the whole experience of using this.
+// At warm-up 4/7/10 hops the corpus gives 13/9/8 blinks against 5/5/6 notes
+// missed entirely in stitched sessions -- 7 buys almost all of the continuity
+// without costing a note.
+const WARMUP_HOPS = 7;          // 70 ms of usable estimate before showing one
+const MIN_SPAN_HOPS = 40;       // 400 ms minimum time on screen once shown
+const HOLD_HOPS = 20;           // 200 ms a reading may be held across a gap in
+                                // the estimate itself (as opposed to in sigma)
 const SIGMA_FLOOR = 0.15;       // phone sample clocks are +-20-50 ppm (DESIGN §10)
 const QUIET_MS = 250;
 const LOCK_WINDOW = 0.4;        // seconds after onset during which acquisition may set f1
@@ -296,6 +312,11 @@ export class Engine {
     this.acqSince = 0;
     this.continuityUntil = 0;
     this.locked = false;
+    this.wasShowing = false;
+    this.validHops = 0;
+    this.held = null;
+    this.spanFloor = 0;
+    this.spanFloor = 0;
     this.noteMs = new Set();
     this.lastPublished = null;
     this.quietSince = 0;
@@ -306,6 +327,11 @@ export class Engine {
 
   _endNote() {
     this.state = STATE.QUIET;
+    this.wasShowing = false;
+    this.validHops = 0;
+    this.held = null;
+    this.spanFloor = 0;
+    this.spanFloor = 0;
     this.f1 = null;
     this.B = 0;
     this.tracker.reset(this.ring.end);
@@ -371,8 +397,16 @@ export class Engine {
     for (let m = 1; m <= MAX_PARTIAL; m++) {
       const predicted = partialFreq(m, this.f1, this.B);
       if (predicted > Math.min(MAX_TRACK_HZ, this.sampleRate * 0.45)) break;
+      // Hysteresis on admission itself. A partial sitting near the threshold
+      // flips in and out frame to frame, the surviving count oscillates around
+      // the two that §7.3's ladder needs, and the reading strobes -- measured
+      // at 50 Hz on a low E, five spans inside one note. Holding an
+      // already-tracked partial to a lower bar is the same asymmetry the rest
+      // of this file uses, applied one level further down, and it fixes the
+      // strobe at its cause rather than smoothing it at the display.
+      const tracked = this.tracker.get(m) !== undefined;
       const peak = this._peakNear(
-        predicted, this.f1 / 3, alpha,
+        predicted, this.f1 / 3, tracked ? alpha * ADMIT_KEEP : alpha,
         Math.max(1.5 * this.binHz, predicted * 0.05),   // ~85 cents
       );
       if (!peak) continue;
@@ -662,6 +696,43 @@ export class Engine {
   _present(est, gates, { t }) {
     const hard = gates.find((g) => HARD_GATES.has(g)) || null;
     if (!est) {
+      // Briefly hold the last reading across a gap, rather than blanking.
+      //
+      // On a low E the partial count hovers at the two §7.3 needs, so the
+      // estimate disappears for a tenth of a second at a time while the note is
+      // still plainly sounding. Blanking there is not caution -- it is a strobe,
+      // and it misrepresents a steady string as an unsteady one. The held
+      // reading is not presented as fresh: sigma grows with its age, so the
+      // band visibly widens, and it is dropped the moment a hard gate fires,
+      // the note ends, or the hold expires. R7 is unaffected, because the
+      // inflated sigma can no longer satisfy the in-tune interval.
+      // `room` is the one hard gate a held reading may bridge, and the
+      // distinction is about what each gate is claiming.
+      //
+      // `clipping`, `polyphony` and `octave` all say the reading ITSELF was
+      // wrong -- a fake harmonic series, a second note, the wrong period --
+      // and a wrong number must not persist for a moment longer. `room` says
+      // only that fewer than two partials clear the mask RIGHT NOW. Arriving
+      // at a note with that true means it cannot be measured, and the gate is
+      // correct to refuse. Arriving at it a tenth of a second after measuring
+      // the same note from five partials means the count dipped, and refusing
+      // there produces the strobe: measured, every one of the eight sub-200 ms
+      // spans in the corpus ended exactly this way.
+      const fatal = gates.find((g) => g !== 'room' && HARD_GATES.has(g)) || null;
+      const h = this.held;
+      const age = h ? this.hopIndex - h.at : Infinity;
+      if (h && !fatal && this.state !== STATE.QUIET && age <= HOLD_HOPS) {
+        const aged = Math.hypot(h.sigma, (age / HOLD_HOPS) * 3);
+        return {
+          state: this.state, heard: true, sinceOnset: t,
+          freq: h.freq, note: h.note.name, octave: h.note.octave, midi: h.note.midi,
+          cents: h.cents, sigma: aged, d: h.d, gates, hardGate: null,
+          partials: 0, rung: 'held', showReading: true, held: true,
+          inTune: false, confident: false,
+        };
+      }
+      this.wasShowing = false;
+      this.validHops = 0;
       return {
         ...idleResult(),
         state: this.state,
@@ -677,6 +748,41 @@ export class Engine {
     // would otherwise leave the string flat by d every single time.
     const corrected = est.freq;
     const note = nearestNote(corrected, this.a4);
+
+    // Hysteresis on the show/hide decision, and a minimum time on screen.
+    //
+    // A single threshold on sigma makes the reading STROBE on the strings it is
+    // hardest on. Measured at 50 Hz on a low E: five separate spans of 0.02 to
+    // 0.18 seconds with four gaps between them, inside one note -- the number
+    // appearing and vanishing five times in a second and a half, which is
+    // precisely the frenetic behaviour this tuner was reported for. The median
+    // hold time across a corpus reported that as "1.4 s" and hid it completely.
+    //
+    // This does not hide uncertainty: a reading held through the band still
+    // carries its own sigma, the displayed band widens accordingly, and R7 is
+    // untouched because the in-tune claim needs |cents| + 2 sigma <= 3, which a
+    // sigma anywhere near the upper threshold can never satisfy.
+    const usable = !hard && (sigma < SHOW_SIGMA || (this.wasShowing && sigma < KEEP_SIGMA));
+    // A reading must also be usable for a moment before it goes on screen, or
+    // a two-frame excursion at the edge of a dying note flashes a number and
+    // takes it away again.
+    this.validHops = usable ? this.validHops + 1 : 0;
+    let show = usable && (this.wasShowing || this.validHops >= WARMUP_HOPS);
+
+    // A minimum span. Once a number is on screen it stays for at least this
+    // long, unless a HARD gate fires or the note ends -- a reading that appears
+    // and vanishes inside a fifth of a second is not information, it is a
+    // flicker, and a player reads it as the tuner being unsure of itself rather
+    // than as the tuner being careful. Measured across the corpus, 16 of 54
+    // spans were under 200 ms before this.
+    //
+    // Nothing is concealed by it: sigma is whatever it is, the displayed band
+    // widens to match, and the in-tune claim still needs |cents| + 2 sigma <= 3,
+    // which a sigma large enough to have ended the span cannot satisfy.
+    if (show && !this.wasShowing) this.spanFloor = this.hopIndex + MIN_SPAN_HOPS;
+    else if (!show && !hard && this.wasShowing && this.hopIndex < this.spanFloor) show = true;
+    this.wasShowing = show;
+    if (show) this.held = { cents: note.cents, freq: corrected, note, sigma, d: glide.d, at: this.hopIndex };
 
     const inTune = Math.abs(note.cents) + 2 * sigma <= 3 && glide.d <= 0.3 && !hard;
     return {
@@ -702,7 +808,7 @@ export class Engine {
       // that displaces the true value from the reading goes INSIDE the
       // interval. A separate AND-clause does not compose with an interval test
       // -- this document made that mistake twice.
-      showReading: sigma < 5 && !hard,
+      showReading: show,
       inTune,
       confident: sigma < 1.5 && !hard,
     };

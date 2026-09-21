@@ -8,6 +8,7 @@
     "sweep": "node tools/sweep.mjs 120",
     "session": "node tools/session.mjs 1 6",
     "browser": "node tools/browser-test.mjs samples/g3-2-normal.wav",
+    "film": "node tools/filmstrip.mjs samples/g3-2-normal.wav 130 30",
     "truth": "node tools/measure-truth.mjs",
     "check": "npm run score && npm run sweep && npm run session"
   },

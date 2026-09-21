@@ -54,8 +54,34 @@ let node = null;
 let stream = null;
 let running = false;
 let a4 = Number(localStorage.getItem('tunedup.a4')) || 440;
-let lastHeard = 0;
 let calibrating = null;   // { resolve, mode }
+
+// Per-note display state. All three exist because a filmstrip of one pluck
+// (tools/filmstrip.mjs) showed the UI doing things no value-checking test can
+// see: acknowledging the same note six times, and calling a note that had just
+// read perfectly "too much background noise" as it faded.
+let lastSinceOnset = Infinity;
+let gotReading = false;
+let statusText = '';
+let statusAt = 0;
+const MIN_STATUS_MS = 700;    // a message holds the screen this long before
+                              // another may replace it, so advice cannot flicker
+const QUIET_GRACE_MS = 450;   // how long to try before admitting we cannot read
+
+const RESTING = 'Play a string.';
+
+function setStatus(text, warn = false) {
+  const now = performance.now();
+  if (text === statusText) return;
+  // The resting message is not a message competing for the screen -- it is the
+  // screen's default. Holding it back leaves the app blank for a second after
+  // a note dies, which reads as a freeze rather than as calm.
+  if (text !== RESTING && now - statusAt < MIN_STATUS_MS) return;
+  statusText = text;
+  statusAt = now;
+  ui.status.textContent = text;
+  ui.status.classList.toggle('warn', warn && Boolean(text));
+}
 
 ui.refValue.textContent = a4;
 
@@ -218,10 +244,17 @@ function render(r, msg) {
     return;
   }
 
-  // Acknowledgement first, and never gated on the reading: the app can show a
-  // pluck landed long before it knows what the pluck was.
-  if (r.heard && performance.now() - lastHeard > 400) {
-    lastHeard = performance.now();
+  // Acknowledgement: ONCE per note, when the pluck lands.
+  //
+  // It is a separate channel from the reading (R4) and it arrives inside
+  // 100 ms whether or not there is a number yet -- but it acknowledges the
+  // PLUCK, and a pluck happens once. Re-firing it while the note is still
+  // ringing turns a confirmation into a strobe, which is what it was doing
+  // every 400 ms for the life of every note.
+  const isNewNote = r.heard && r.sinceOnset < lastSinceOnset;
+  lastSinceOnset = r.heard ? r.sinceOnset : Infinity;
+  if (isNewNote) {
+    gotReading = false;
     ui.meter.classList.remove('ack');
     void ui.meter.offsetWidth;
     ui.meter.classList.add('ack');
@@ -230,32 +263,39 @@ function render(r, msg) {
   if (!r.heard) {
     ui.meter.classList.remove('live', 'good');
     ui.note.className = 'note idle';
-    ui.note.textContent = '—';
+    ui.note.textContent = '\u00b7';
     ui.octave.textContent = '';
-    ui.cents.textContent = ' ';
+    ui.cents.textContent = '\u00a0';
     ui.direction.textContent = '';
-    ui.status.textContent = 'Play a string.';
-    ui.status.classList.remove('warn');
+    setStatus(RESTING);
     return;
   }
 
-  // A note is sounding but the reading is withheld: name the note if we have
-  // it, and say WHY there is no number. "Show the reason whenever any gate
-  // fired" is not decoration -- the prototype's failure was a tuner that went
-  // quiet without ever saying what was wrong.
   if (!r.showReading) {
     ui.meter.classList.remove('live', 'good');
     ui.note.className = 'note idle';
-    ui.note.textContent = r.note || '—';
+    ui.note.textContent = r.note || '\u00b7';
     ui.octave.textContent = r.octave != null ? r.octave : '';
-    ui.cents.textContent = ' ';
+    ui.cents.textContent = '\u00a0';
     ui.direction.textContent = '';
-    const reason = (r.gates || []).map((g) => GATE_TEXT[g]).find(Boolean);
-    ui.status.textContent = reason || 'Listening…';
-    ui.status.classList.toggle('warn', Boolean(r.hardGate));
+
+    // A note that HAS been read and is now fading is not a problem, and saying
+    // anything about it is worse than saying nothing: "too much background
+    // noise to tune here" is alarming, it is false, and it appeared one second
+    // after the same note read to a tenth of a cent. Explain a gate only when
+    // it is the reason the player never got a number at all -- and only after
+    // giving the tracker a moment, so a warning does not flash during the
+    // 400 ms every note spends warming up.
+    if (gotReading) setStatus('');
+    else if (r.sinceOnset < QUIET_GRACE_MS / 1000) setStatus('Listening\u2026');
+    else {
+      const reason = (r.gates || []).map((g) => GATE_TEXT[g]).find(Boolean);
+      setStatus(reason || 'Listening\u2026', Boolean(r.hardGate));
+    }
     return;
   }
 
+  gotReading = true;
   ui.meter.classList.add('live');
   ui.meter.classList.toggle('good', r.inTune);
   ui.note.className = r.inTune ? 'note good' : 'note';
@@ -281,21 +321,24 @@ function render(r, msg) {
 
   if (r.inTune) {
     ui.direction.textContent = 'in tune';
-    ui.status.textContent = '';
-    ui.status.classList.remove('warn');
+    setStatus('');
     return;
   }
-
   ui.direction.textContent = r.cents > 0 ? 'sharp' : 'flat';
 
-  // The sign of the glide is worth saying out loud. It is always downward, so
-  // when the reading is sharp and still falling the honest instruction is
-  // "wait" -- which needs no model at all.
-  const reason = (r.gates || []).map((g) => GATE_TEXT[g]).find(Boolean);
-  if (r.d > 0.6 && r.cents > 0) ui.status.textContent = 'Still settling — give it a moment.';
-  else if (r.d > 12) ui.status.textContent = 'Plucked hard — softer settles sooner.';
-  else ui.status.textContent = reason || '';
-  ui.status.classList.toggle('warn', Boolean(r.hardGate));
+  // Say something only when it changes what the player should do. The glide is
+  // always downward, so when the reading is sharp and still falling the honest
+  // instruction is "wait" -- which needs no model at all. Every soft gate is
+  // true, and saying all of them all the time is how the last version of this
+  // tuner became exhausting; surface one only when it is visibly costing
+  // precision.
+  // Coaching is only coaching if it arrives while the pluck is still the thing
+  // you just did. At 1.8 s into a note it is a verdict on something you can no
+  // longer change, and on a wound low E -- where theta is long, so d is large
+  // on an ordinary pluck -- it was firing on takes recorded as "normal".
+  if (r.d > 15 && r.sinceOnset < 1.2) setStatus('Plucked hard \u2014 softer settles sooner.');
+  else if (r.d > 0.6 && r.cents > 0) setStatus('Still settling \u2014 give it a moment.');
+  else setStatus(r.sigma > 2 ? ((r.gates || []).map((g) => GATE_TEXT[g]).find(Boolean) || '') : '');
 }
 
 // ---- service worker ------------------------------------------------------

@@ -44,7 +44,8 @@ to tune here" is a better answer than a confident wrong one.
 | false "in tune" beyond 3 cents | **0 of 337** claims |
 | time to a usable reading | median 520 ms, p90 860 ms |
 | tracking duration after one pluck | 0.9–2.8 s |
-| stitched sessions: wrong strings, readings in silence, jumps | **0, 0, 0** in 3587 readings |
+| stitched sessions: wrong strings, readings in silence, jumps | **0, 0, 0** in 3882 readings |
+| times the number blinks off and back inside one note | 9 across 48 notes |
 
 Where it is weakest: a softly plucked low E goes quiet to the tuner after about
 a second, against a 4-second goal. See [DESIGN.md §12](DESIGN.md).
@@ -58,6 +59,7 @@ npm run score     # 32 real recordings against independent ground truth
 npm run sweep     # randomised synthetic guitar: absolute accuracy, sigma calibration
 npm run session   # recordings stitched into whole sessions: glitches, not accuracy
 npm run browser   # the real app in a real browser with faked audio
+npm run film      # a whole pluck, frame by frame, as a contact sheet
 ```
 
 Each answers a different question and they are not interchangeable. The real
@@ -67,6 +69,14 @@ recordings' ground truth is only ±1 cent — testing a sub-cent σ against a
 ±1 cent reference measures mostly the reference. The stitched sessions grade
 glitchiness, and every failure ever reported from real use showed up there and
 nowhere else. The browser test measures the plumbing, which is the actual risk.
+
+The filmstrip is the only one that shows what the app *looks like*. Everything
+above it checks values: whether the right number arrived, and how close it was.
+None of them can see an acknowledgement flash firing six times instead of once,
+or a warning that contradicts the reading shown a second earlier, or a number
+that appears and vanishes five times in a second and a half. All three of those
+were in the app, passing every other harness, until a pluck was laid out frame
+by frame and looked at.
 
 ## Layout
 

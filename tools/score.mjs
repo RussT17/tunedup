@@ -36,6 +36,15 @@ function run(file) {
   let frames = 0, readings = 0, notes = 0, prevState = 'quiet', noteFrames = 0;
   const holdTimes = [];
   let heldFrom = null, lastReading = null;
+  // Continuity: how many separate times the number appears and disappears
+  // inside ONE note, and how long the breaks are.
+  //
+  // This is not an accuracy measure and no accuracy measure can see it. A
+  // median hold time of 1.4 s is the same number whether the reading was one
+  // steady span or five flashes with gaps between them, and the difference is
+  // the whole experience of using the thing.
+  const spans = [];
+  let spanFrom = null, blinks = 0, gapList = [];
   let firstReadingAt = null, noteStartedAt = null;
   const ttf = [];
   let inTuneWrong = 0, inTuneTotal = 0;
@@ -48,15 +57,18 @@ function run(file) {
     if (prevState === 'quiet' && r.state !== 'quiet') { notes++; noteStartedAt = tNow; firstReadingAt = null; }
     if (r.state === 'quiet') {
       if (heldFrom !== null && lastReading !== null) holdTimes.push(lastReading - heldFrom);
+      if (spanFrom !== null) { spans.push(lastReading - spanFrom); spanFrom = null; }
       heldFrom = null; lastReading = null;
       prevState = 'quiet'; continue;
     }
     prevState = r.state;
     noteFrames++;
     for (const g of r.gates) gates.set(g, (gates.get(g) || 0) + 1);
+    if (!r.showReading && spanFrom !== null) { spans.push(lastReading - spanFrom); spanFrom = null; }
     if (r.showReading && r.freq) {
       readings++;
       if (heldFrom === null) heldFrom = tNow;
+      if (spanFrom === null) { spanFrom = tNow; if (lastReading !== null && tNow - lastReading < 1.0) { blinks++; gapList.push(tNow - lastReading); } }
       lastReading = tNow;
       const e = cents(r.freq, ref);
       errs.push(e);
@@ -74,7 +86,7 @@ function run(file) {
   return {
     file, string, ref, frames, readings, notes, errs, settled, sigmas, gates, ttf,
     inTuneTotal, inTuneWrong, noteFrames, pegturn: /pegturn/.test(file),
-    holdTimes,
+    holdTimes, spans, blinks, gapList,
   };
 }
 
@@ -82,7 +94,8 @@ const q = (a, p) => { if (!a.length) return NaN; const v = [...a].sort((x, y) =>
 const abs = (a) => a.map(Math.abs);
 
 const rows = files.map(run);
-let allErr = [], allSettled = [], allSigma = [], allTtf = [], allHold = [], totalGates = new Map();
+let allErr = [], allSettled = [], allSigma = [], allTtf = [], allHold = [], allSpans = [], allGaps = [], totalGates = new Map();
+let totalBlinks = 0;
 let inTuneTotal = 0, inTuneWrong = 0, totalNotes = 0, coverage = 0, coverageFrames = 0;
 
 console.log('file                    notes  reads   med|e|   p90|e|    max|e|   medSig   ttf');
@@ -92,6 +105,9 @@ for (const r of rows) {
   // sounding. Scoring them as accuracy would measure the wrong thing.
   if (!r.pegturn) { allErr = allErr.concat(r.errs); allSettled = allSettled.concat(r.settled); }
   allHold = allHold.concat(r.holdTimes);
+  allSpans = allSpans.concat(r.spans);
+  allGaps = allGaps.concat(r.gapList);
+  totalBlinks += r.blinks;
   allSigma = allSigma.concat(r.sigmas);
   allTtf = allTtf.concat(r.ttf);
   for (const [g, n] of r.gates) totalGates.set(g, (totalGates.get(g) || 0) + n);
@@ -118,6 +134,10 @@ const summary = {
   settledP99Abs: q(as, 0.99),
   medHoldS: q(allHold, 0.5),
   p10HoldS: q(allHold, 0.1),
+  blinks: totalBlinks,
+  spansUnder200ms: allSpans.filter((x) => x < 0.2).length,
+  spans: allSpans.length,
+  medSpanS: q(allSpans, 0.5),
   medAbsErr: q(ae, 0.5),
   p90AbsErr: q(ae, 0.9),
   p99AbsErr: q(ae, 0.99),
@@ -147,10 +167,10 @@ const cmpAt = process.argv.indexOf('--compare');
 if (cmpAt > 0 && fs.existsSync(process.argv[cmpAt + 1])) {
   const base = JSON.parse(fs.readFileSync(process.argv[cmpAt + 1], 'utf8'));
   console.log('\n--- vs baseline ---');
-  for (const k of ['settledMedAbs', 'settledP90Abs', 'medAbsErr', 'p90AbsErr', 'maxAbsErr', 'coverageOfNote', 'medHoldS', 'medTtfMs', 'inTuneViolations', 'notes']) {
+  for (const k of ['settledMedAbs', 'settledP90Abs', 'medAbsErr', 'p90AbsErr', 'maxAbsErr', 'coverageOfNote', 'medHoldS', 'blinks', 'spansUnder200ms', 'medSpanS', 'medTtfMs', 'inTuneViolations', 'notes']) {
     if (typeof base[k] !== 'number') continue;
     const d = summary[k] - base[k];
-    const better = ['coverageOfNote', 'notes', 'medHoldS'].includes(k) ? d > 0 : d < 0;
+    const better = ['coverageOfNote', 'notes', 'medHoldS', 'medSpanS'].includes(k) ? d > 0 : d < 0;
     console.log(`  ${k.padEnd(18)} ${base[k].toFixed(3)} -> ${summary[k].toFixed(3)}  ${d === 0 ? '' : (better ? 'better' : 'WORSE')}`);
   }
 }
