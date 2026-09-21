@@ -1,101 +1,63 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101418">
 <title>TunedUp</title>
-<meta name="description" content="A simple, accurate chromatic instrument tuner that runs in your browser." />
-<meta name="theme-color" content="#0b0d10" />
-<meta name="color-scheme" content="dark" />
-<meta name="mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<meta name="apple-mobile-web-app-title" content="TunedUp" />
-<link rel="manifest" href="./manifest.webmanifest" />
-<link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
-<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
-<link rel="stylesheet" href="./styles.css" />
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<main id="app" class="state-idle">
+<main id="app">
 
-  <header class="topbar">
-    <div class="wordmark">TunedUp</div>
-  </header>
+  <!-- Start. Holding the button IS the room measurement: one control, no
+       separate calibration step, and the thing you wait for is the thing the
+       tuner needs. -->
+  <section id="start" class="screen">
+    <h1>TunedUp</h1>
+    <button id="hold" class="hold" aria-describedby="hold-hint">
+      <span class="hold-fill" id="hold-fill"></span>
+      <span class="hold-label" id="hold-label">Hold to start</span>
+    </button>
+    <p id="hold-hint" class="hint">Stay quiet while it listens to your room.</p>
+    <p id="start-error" class="error" hidden></p>
+  </section>
 
-  <div class="stage">
-    <section class="readout" aria-live="polite">
-      <div class="note">
-        <span id="noteName" class="note-name"></span><span id="noteOctave" class="note-octave"></span>
-      </div>
-      <div id="centsText" class="cents"></div>
-    </section>
-
-    <section class="gauge-wrap">
-      <svg class="gauge" viewBox="0 0 300 186" role="img" aria-label="Tuning meter">
-        <g id="ticks"></g>
-        <path class="arc" d="M 39.1 109.6 A 118 118 0 0 1 260.9 109.6" />
-        <path id="arcProgress" class="arc-progress" d="M 39.1 109.6 A 118 118 0 0 1 260.9 109.6" pathLength="100" />
-        <circle id="strike" class="strike" cx="150" cy="150" r="7" />
-        <g id="needle" class="needle">
-          <line x1="150" y1="150" x2="150" y2="54" />
-          <circle cx="150" cy="150" r="7" />
-        </g>
-        <circle id="target" class="target" cx="150" cy="22" r="4" />
-      </svg>
-      <div id="hint" class="hint">Play a single note</div>
-    </section>
-  </div>
-
-  <footer class="footer">
-    <div id="detailText" class="detail"></div>
-
-    <div class="controls">
-      <label class="chip">
-        <span class="chip-label">Reference</span>
-        <select id="refSelect" aria-label="Reference pitch"></select>
-      </label>
-      <label class="chip">
-        <span class="chip-label">Mode</span>
-        <select id="modeSelect" aria-label="Detection mode"></select>
-      </label>
-      <label class="chip">
-        <span class="chip-label">String</span>
-        <select id="stringSelect" aria-label="Target string"></select>
-      </label>
+  <!-- Tuning. -->
+  <section id="tuner" class="screen" hidden>
+    <div class="note-row">
+      <span id="note" class="note idle">&middot;</span><span id="octave" class="octave"></span>
     </div>
 
-    <p id="modeBlurb" class="blurb"></p>
-    <div class="actions">
-      <button id="calibrateBtn" class="start calibrate" type="button">
-        <span class="calibrate-fill" id="calibrateFill"></span>
-        <span class="calibrate-label" id="calibrateLabel">Hold to calibrate</span>
-      </button>
-      <div class="actions-row">
-        <button id="traceBtn" class="link" type="button">Trace</button>
-        <button id="stopBtn" class="link" type="button" hidden>Stop</button>
+    <div class="meter" id="meter">
+      <div class="meter-track">
+        <div class="meter-target"></div>
+        <div class="meter-ticks" id="ticks"></div>
+        <div class="meter-band" id="band"></div>
+        <div class="meter-needle" id="needle"></div>
       </div>
+      <div class="meter-scale"><span>&minus;50</span><span>0</span><span>+50</span></div>
     </div>
-    <p id="errorText" class="error" hidden></p>
-  </footer>
+
+    <div class="cents-row">
+      <span id="cents" class="cents">&nbsp;</span>
+      <span id="direction" class="direction"></span>
+    </div>
+
+    <p id="status" class="status">Play a string.</p>
+
+    <footer class="controls">
+      <button id="recalibrate" class="ghost">Re-read the room</button>
+      <button id="ref" class="ghost" aria-label="Reference pitch">A4 = <span id="ref-value">440</span></button>
+    </footer>
+  </section>
 
 </main>
-
-<section id="tracePanel" class="panel" hidden>
-  <header class="panel-top">
-    <h2 class="panel-title">Last pluck</h2>
-    <button id="traceClose" class="link" type="button">Close</button>
-  </header>
-  <svg id="traceChart" class="trace-chart" viewBox="0 0 360 262" role="img" aria-label="Pitch over time since the pluck"></svg>
-  <p id="traceReadout" class="trace-readout"></p>
-  <dl id="traceStats" class="trace-stats"></dl>
-  <div class="record">
-    <button id="saveBtn" class="save" type="button">Record 15 s</button>
-    <div id="recordBar" class="record-bar" hidden><span id="recordFill"></span></div>
-  </div>
-  <p id="panelNote" class="panel-note">Tap, play, and it downloads itself when the 15 seconds are up.</p>
-</section>
-
-<script type="module" src="./app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>

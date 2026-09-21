@@ -1,144 +1,156 @@
-// One number for "did that change make it better?".
+// Scores the engine against the 32 real recordings.
 //
-//   node tools/score.mjs            score real samples and the sweep
-//   node tools/score.mjs --save     also write the result as the new baseline
+// Ground truth comes from tools/measure-truth.mjs, which shares no code with
+// the estimators: long windows contained wholly inside a note, partial-series
+// fit. It is good to about +-1 cent with a known +0.85 cent bias that is
+// uniform across strings, so it answers "did that change make it better?" and
+// "does it behave on real audio?" -- but NOT "is sigma honest?" or "is R1 met
+// in absolute terms". Those need the synthetic sweep (tools/sweep.mjs).
 //
-// Real recordings say whether it works on an actual guitar; the randomised
-// sweep says whether it works on anything else. A change that moves one up and
-// the other down is the shape overfitting takes.
+//   node tools/score.mjs [--save baseline.json] [--compare baseline.json]
 import fs from 'fs';
 import path from 'path';
-import { execFileSync } from 'child_process';
-import { fileURLToPath } from 'url';
-import { Engine } from '../engine.js';
-import { createEstimator, MODES, STRINGS } from '../estimators.js';
-import { measureRobust } from './measure-truth.mjs';
+import { readWav } from './wav.mjs';
+import { Engine } from '../src/dsp/engine.js';
 
-const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const samples = path.join(root, 'samples');
+const DIR = 'samples';
+const truth = JSON.parse(fs.readFileSync(path.join(DIR, 'truth.json'), 'utf8'));
 const cents = (a, b) => 1200 * Math.log2(a / b);
-const REFERENCE = 440;
-const STRING_IDS = ['e2', 'a2', 'd3', 'g3', 'b3', 'e4'];
-// Single-pluck takes only: a re-pluck recording has several notes and no single
-// settled pitch to be scored against.
-const TAKES = ['1-reference', '2-normal', '3-hard'];
 
-function readWav(file) {
-  const b = fs.readFileSync(file);
-  const sampleRate = b.readUInt32LE(24);
-  const n = (b.length - 44) / 2;
-  const out = new Float32Array(n);
-  for (let i = 0; i < n; i++) out[i] = b.readInt16LE(44 + i * 2) / 32768;
-  return { samples: out, sampleRate };
-}
+const files = fs.readdirSync(DIR)
+  .filter((f) => f.endsWith('.wav') && /^[a-g]\d-/.test(f))
+  .sort();
 
-/** Truth per string, measured once from the soft reference pluck and cached. */
-function groundTruth() {
-  const cache = path.join(samples, 'truth.json');
-  if (fs.existsSync(cache)) return JSON.parse(fs.readFileSync(cache, 'utf8'));
-  const truth = {};
-  for (const id of STRING_IDS) {
-    const string = STRINGS.find((s) => s.id === id);
-    const nominal = REFERENCE * Math.pow(2, (string.midi - 69) / 12);
-    const file = path.join(samples, `${id}-1-reference.wav`);
-    if (!fs.existsSync(file)) continue;
-    const measured = measureRobust(file, nominal);
-    if (measured) truth[id] = { hz: measured.f1, nominal, spread: measured.spread, B: measured.B };
-  }
-  fs.writeFileSync(cache, JSON.stringify(truth, null, 2));
-  return truth;
-}
-
-function run(modeId, signal, sampleRate, target) {
+function run(file) {
+  const { samples, sampleRate } = readWav(path.join(DIR, file));
+  const string = file.split('-')[0];
+  const ref = truth[string].hz;
   const engine = new Engine(sampleRate);
-  engine.setTarget(target);
-  const estimator = createEstimator(modeId, { sampleRate, engine, targetHz: () => target });
-  const tick = Math.round(sampleRate * 0.04);
-  let next = tick;
-  const readings = [];
-  for (let offset = 0; offset < signal.length; offset += 1024) {
-    engine.push(signal.subarray(offset, Math.min(offset + 1024, signal.length)));
-    while (engine.written >= next) {
-      const frame = engine.analyse();
-      readings.push({ frame, reading: estimator.update(frame) });
-      next += tick;
+  const block = 512;
+
+  const errs = [];
+  const settled = [];
+  const sigmas = [];
+  const shown = [];
+  const gates = new Map();
+  let frames = 0, readings = 0, notes = 0, prevState = 'quiet', noteFrames = 0;
+  const holdTimes = [];
+  let heldFrom = null, lastReading = null;
+  let firstReadingAt = null, noteStartedAt = null;
+  const ttf = [];
+  let inTuneWrong = 0, inTuneTotal = 0;
+
+  for (let at = 0; at + block <= samples.length; at += block) {
+    const r = engine.push(samples.subarray(at, at + block));
+    if (r === undefined) continue;
+    frames++;
+    const tNow = at / sampleRate;
+    if (prevState === 'quiet' && r.state !== 'quiet') { notes++; noteStartedAt = tNow; firstReadingAt = null; }
+    if (r.state === 'quiet') {
+      if (heldFrom !== null && lastReading !== null) holdTimes.push(lastReading - heldFrom);
+      heldFrom = null; lastReading = null;
+      prevState = 'quiet'; continue;
+    }
+    prevState = r.state;
+    noteFrames++;
+    for (const g of r.gates) gates.set(g, (gates.get(g) || 0) + 1);
+    if (r.showReading && r.freq) {
+      readings++;
+      if (heldFrom === null) heldFrom = tNow;
+      lastReading = tNow;
+      const e = cents(r.freq, ref);
+      errs.push(e);
+      sigmas.push(r.sigma);
+      shown.push({ t: tNow, e, sigma: r.sigma, d: r.d });
+      if (firstReadingAt === null && noteStartedAt !== null) {
+        firstReadingAt = tNow; ttf.push(tNow - noteStartedAt);
+      }
+      // What a player actually reads: the number after the glide has largely
+      // gone. R1 is a statement about the SETTLED pitch.
+      if (r.sinceOnset > 1.5) settled.push(e);
+      if (r.inTune) { inTuneTotal++; if (Math.abs(e) > 3) inTuneWrong++; }
     }
   }
-  return readings;
+  return {
+    file, string, ref, frames, readings, notes, errs, settled, sigmas, gates, ttf,
+    inTuneTotal, inTuneWrong, noteFrames, pegturn: /pegturn/.test(file),
+    holdTimes,
+  };
 }
 
-const quantile = (values, q) => {
-  if (!values.length) return NaN;
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
-};
-const show = (v) => (Number.isNaN(v) ? '   — ' : v.toFixed(1).padStart(5));
+const q = (a, p) => { if (!a.length) return NaN; const v = [...a].sort((x, y) => x - y); return v[Math.min(v.length - 1, Math.floor(p * v.length))]; };
+const abs = (a) => a.map(Math.abs);
 
-const truth = groundTruth();
-const results = {};
+const rows = files.map(run);
+let allErr = [], allSettled = [], allSigma = [], allTtf = [], allHold = [], totalGates = new Map();
+let inTuneTotal = 0, inTuneWrong = 0, totalNotes = 0, coverage = 0, coverageFrames = 0;
 
-console.log('REAL SAMPLES — error against ground truth from the reference pluck\n');
-console.log('  mode        |err| @1s        @2s        @3s     tracked  worst');
-console.log('              med   p90   med   p90   med   p90     med    jump');
-for (const mode of MODES) {
-  const stat = { at1: [], at2: [], at3: [], held: [], jump: [] };
-  for (const id of STRING_IDS) {
-    if (!truth[id]) continue;
-    const string = STRINGS.find((s) => s.id === id);
-    const target = REFERENCE * Math.pow(2, (string.midi - 69) / 12);
-    for (const take of TAKES) {
-      const file = path.join(samples, `${id}-${take}.wav`);
-      if (!fs.existsSync(file)) continue;
-      const { samples: signal, sampleRate } = readWav(file);
-      const readings = run(mode.id, signal, sampleRate, target);
-      const live = readings.filter((e) => e.reading.status === 'live' && e.reading.frequency && e.frame.onsetAge !== null);
-      if (!live.length) continue;
-      const at = (t) => {
-        const hit = live.filter((e) => e.frame.onsetAge <= t);
-        return hit.length ? Math.abs(cents(hit[hit.length - 1].reading.frequency, truth[id].hz)) : null;
-      };
-      for (const [key, value] of [['at1', at(1)], ['at2', at(2)], ['at3', at(3)]]) {
-        if (value !== null && value < 300) stat[key].push(value);
-      }
-      stat.held.push(live[live.length - 1].frame.onsetAge);
-      let worst = 0;
-      for (let k = 1; k < live.length; k++) {
-        if (live[k].frame.onsetAge < 1) continue;
-        worst = Math.max(worst, Math.abs(cents(live[k].reading.frequency, live[k - 1].reading.frequency)));
-      }
-      stat.jump.push(worst);
-    }
-  }
-  results[mode.id] = {
-    at2: quantile(stat.at2, 0.5),
-    p90: quantile(stat.at2, 0.9),
-    held: quantile(stat.held, 0.5),
-    jump: quantile(stat.jump, 0.9),
-  };
+console.log('file                    notes  reads   med|e|   p90|e|    max|e|   medSig   ttf');
+for (const r of rows) {
+  // Peg-turn takes are for glitch behaviour, not accuracy: the string is being
+  // retuned, so truth.json's single settled frequency is simply not what is
+  // sounding. Scoring them as accuracy would measure the wrong thing.
+  if (!r.pegturn) { allErr = allErr.concat(r.errs); allSettled = allSettled.concat(r.settled); }
+  allHold = allHold.concat(r.holdTimes);
+  allSigma = allSigma.concat(r.sigmas);
+  allTtf = allTtf.concat(r.ttf);
+  for (const [g, n] of r.gates) totalGates.set(g, (totalGates.get(g) || 0) + n);
+  inTuneTotal += r.inTuneTotal; inTuneWrong += r.inTuneWrong;
+  totalNotes += r.notes; coverage += r.readings; coverageFrames += r.noteFrames;
+  const ae = abs(r.errs);
   console.log(
-    `  ${mode.label.padEnd(10)} ${show(quantile(stat.at1, 0.5))} ${show(quantile(stat.at1, 0.9))} ` +
-    `${show(quantile(stat.at2, 0.5))} ${show(quantile(stat.at2, 0.9))} ` +
-    `${show(quantile(stat.at3, 0.5))} ${show(quantile(stat.at3, 0.9))} ` +
-    `${show(quantile(stat.held, 0.5))}s ${show(quantile(stat.jump, 0.9))}c`
+    `${r.file.padEnd(22)} ${String(r.notes).padStart(5)} ${String(r.readings).padStart(6)}` +
+    `  ${fmt(q(ae, 0.5))} ${fmt(q(ae, 0.9))} ${fmt(Math.max(0, ...ae))}` +
+    `  ${fmt(q(r.sigmas, 0.5))}  ${r.ttf.length ? (q(r.ttf, 0.5) * 1000).toFixed(0) + 'ms' : '-'}`
   );
 }
+function fmt(v) { return Number.isFinite(v) ? v.toFixed(2).padStart(8) : '       -'; }
 
-console.log('\n');
-console.log(execFileSync(process.execPath, [path.join(root, 'tools', 'sweep.mjs'), '40'], { encoding: 'utf8' }).trim());
+const ae = abs(allErr);
+const as = abs(allSettled);
+const summary = {
+  files: rows.length,
+  notes: totalNotes,
+  readings: allErr.length,
+  coverageOfNote: coverage / Math.max(1, coverageFrames),
+  settledMedAbs: q(as, 0.5),
+  settledP90Abs: q(as, 0.9),
+  settledP99Abs: q(as, 0.99),
+  medHoldS: q(allHold, 0.5),
+  p10HoldS: q(allHold, 0.1),
+  medAbsErr: q(ae, 0.5),
+  p90AbsErr: q(ae, 0.9),
+  p99AbsErr: q(ae, 0.99),
+  maxAbsErr: Math.max(0, ...ae),
+  medSigma: q(allSigma, 0.5),
+  medTtfMs: q(allTtf, 0.5) * 1000,
+  p90TtfMs: q(allTtf, 0.9) * 1000,
+  inTuneClaims: inTuneTotal,
+  inTuneViolations: inTuneWrong,
+  gates: Object.fromEntries(totalGates),
+};
+console.log('\n--- reference quality (the ruler\'s own uncertainty) ---');
+for (const [k, v] of Object.entries(truth)) {
+  console.log(`  ${k}  ${v.hz.toFixed(3)} Hz   spread across windows ${v.spread.toFixed(2)} cents`);
+}
+console.log('  R7 is verified on tools/sweep.mjs, where the pitch is exact by construction.');
+console.log('  A violation count here is only as good as the row above it.');
 
-const baseline = path.join(root, 'tools', 'baseline.json');
-if (process.argv.includes('--save')) {
-  fs.writeFileSync(baseline, JSON.stringify(results, null, 2));
-  console.log('\n  baseline saved');
-} else if (fs.existsSync(baseline)) {
-  const previous = JSON.parse(fs.readFileSync(baseline, 'utf8'));
-  console.log('\nCHANGE vs baseline (real samples, error at 2 s, negative is better)\n');
-  for (const mode of MODES) {
-    const now = results[mode.id];
-    const before = previous[mode.id];
-    if (!before || Number.isNaN(now.at2) || Number.isNaN(before.at2)) continue;
-    const delta = now.at2 - before.at2;
-    const mark = Math.abs(delta) < 0.2 ? ' ' : delta < 0 ? '↓' : '↑';
-    console.log(`  ${mode.label.padEnd(10)} ${before.at2.toFixed(1)} → ${now.at2.toFixed(1)} cents  ${mark}`);
+console.log('\n--- summary ---');
+for (const [k, v] of Object.entries(summary)) {
+  console.log(`  ${k.padEnd(18)} ${typeof v === 'number' ? v.toFixed(3) : JSON.stringify(v)}`);
+}
+
+const saveAt = process.argv.indexOf('--save');
+if (saveAt > 0) fs.writeFileSync(process.argv[saveAt + 1], JSON.stringify(summary, null, 2));
+const cmpAt = process.argv.indexOf('--compare');
+if (cmpAt > 0 && fs.existsSync(process.argv[cmpAt + 1])) {
+  const base = JSON.parse(fs.readFileSync(process.argv[cmpAt + 1], 'utf8'));
+  console.log('\n--- vs baseline ---');
+  for (const k of ['settledMedAbs', 'settledP90Abs', 'medAbsErr', 'p90AbsErr', 'maxAbsErr', 'coverageOfNote', 'medHoldS', 'medTtfMs', 'inTuneViolations', 'notes']) {
+    if (typeof base[k] !== 'number') continue;
+    const d = summary[k] - base[k];
+    const better = ['coverageOfNote', 'notes', 'medHoldS'].includes(k) ? d > 0 : d < 0;
+    console.log(`  ${k.padEnd(18)} ${base[k].toFixed(3)} -> ${summary[k].toFixed(3)}  ${d === 0 ? '' : (better ? 'better' : 'WORSE')}`);
   }
 }

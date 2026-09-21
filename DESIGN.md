@@ -6,8 +6,10 @@ should be if it were built again knowing what that prototype found out.
 Measurements quoted come from that prototype against 32 real recordings of one
 guitar, a randomised synthetic sweep, and an independent ground-truth tool.
 
-Revision 7, after six rounds of design review. Section 12 lists what remains
-uncertain.
+Revision 7, after six rounds of design review. Section 12 lists what remained
+uncertain when the document was written; **section 14 answers those items with
+measurements from the implementation**, including the three places where
+building it contradicted the design.
 
 ---
 
@@ -1076,3 +1078,125 @@ Additions required by these revisions:
   whose gates are individually well-motivated can still refuse most good plucks,
   which is the failure mode the prototype's twenty-three booleans actually
   exhibited.
+
+---
+
+## 14. What the implementation measured
+
+The pipeline in §§4–10 was built and is what ships. This section answers §12's
+open items with numbers, because several of them could only ever be closed by
+running the code. Where an item is still open it says so; where the measurement
+contradicted the design it says that too.
+
+**§12.5 — the onset threshold, "absent rather than uncertain", is now a
+number.** `tools/calibrate-onset.mjs` finds plucks with a detector sharing no
+code with the statistic under test (a conservative broadband energy rise on the
+raw signal), then compares the statistic's per-pluck peak against its
+background distribution. The statistic in §6 — log-magnitude flux over
+unexplained bins — had **no usable margin at all**: background median 1.89
+against a pluck p25 of 1.20, i.e. the background was *higher*. It was replaced
+by the new energy appearing above both the room floor and a 100 ms reference
+spectrum, expressed in dB relative to the room's own contribution in the same
+bins. That normalisation is what lets one threshold work in a quiet room and a
+loud one. Measured margin: weakest-decile pluck **5.6 dB** against a background
+p99.9 of **1.4 dB**, a factor of four, against the 1.4× that made the
+prototype's statistic unusable. Thresholds: flux **2.8 dB**, level rise
+**5.0 dB**, two consecutive hops, either sufficient. R4 is implementable.
+
+**§12.4 — R5 is not met as specified, and now has a number.** Time from onset
+to loss of reading, by string: **0.9 s** on a low E reference take, **1.7–2.8 s**
+elsewhere, against the 4 s asked for. The design suspected this ("this may be
+the requirement that turns out to be unmeetable as specified") and it was
+right. Loosening admission to extend it brings back wrong readings directly, so
+the requirement is restated rather than met: a reading survives about two
+seconds after a normal pluck, which is how a player tunes anyway, and the low E
+is the worst case. This is the single largest known gap.
+
+**§12.3 — σ is calibrated, and the model-risk floor in §8 was too small by a
+factor of two.** The reliability diagram runs on the synthetic sweep, as §10
+requires. §8 reasons that with θ known to 20% and the chirp rate to 10%,
+`σ_d ≈ 0.22·d`. Applied, the worst `|error|/σ` across the sweep was **5.94** and
+two bins failed p99. The floor that actually makes σ conservative is
+**`0.42·d`** — the exponential-glide identity is about twice as uncertain in
+practice as that arithmetic suggests, which is model risk the two measurement
+terms cannot see. With it, every σ bin passes p99 and the worst single ratio is
+**3.60**. Note what did *not* change: 140 in-tune claims before and after, none
+beyond 3 cents. σ got honest without the tuner getting quieter.
+
+**§12.6 — gate precision, "the test that matters for the user experience", was
+measured and drove three fixes.** On stitched sessions: **0 wrong strings, 0
+readings in silence, 0 frame-to-frame jumps over 8 cents in 3587 readings.**
+Getting there required (a) the note-end rule's *periodicity* half, without
+which a quiet room's small admission threshold keeps noise "tracking" and the
+note never ends — which is the frenetic jumping in silence this tuner was
+reported for; (b) decoupling χ² from the polyphony gate, since on real audio
+sympathetic ringing raises χ² constantly and it belongs in σ, capped; (c) the
+onset-snapshot rule below.
+
+**R6 needed a mechanism the design does not contain.** An appliance that starts
+*after* the room was measured is invisible to the profile, and minimum
+statistics needs its whole window to catch up. Measured, that cost **15 of 36**
+string entries in stitched sessions — against 2 with the appliance switched
+off. Neither shortening the minimum-statistics window (30 s → 15 s) nor raising
+α fixed it. What fixed it is a physical question the design implies but never
+asks: *did this partial arrive with the note?* A snapshot of a slow (2 s)
+reference spectrum taken at onset contains a hum that has been running for
+seconds and almost none of a 50 ms-old note, so a partial of this note must
+beat it. Two levels are needed — 4.8 dB to join the note, 1.8 dB to stay in it —
+because one threshold for both jobs forces a choice between 0.25 cents of
+settled accuracy and half of R5. With it, the appliance makes no difference at
+all: **4 missed with it, 5 without**.
+
+**§12.7 — θ's timing conflict is real and is handled by a prior, not by
+waiting.** θ needs one to two seconds of envelope; `d` is largest in the first
+second. Returning `d = 0, σ_d = 0` in that window — the obvious implementation —
+is the worst available answer: it leaves a 17-cent glide uncorrected *and*
+tells the display nothing is uncertain. An instrument-class prior (θ = 1.0 s,
+σ = 0.65 s) corrects most of it and declares what it does not know. Two further
+corrections came out of the sweep, both worth more than the prior: θ must be
+taken from the **lowest** partial re-chosen every hop, not from whichever
+partial was tracked first — locking at onset lands on a high partial that
+decays several times faster, and measured θ read 0.28 s where the truth was
+1.35 s. And the formal standard error of the slope is worthless under
+polarisation beating, because a 0.3 Hz beat inside a 1.6 s window is a trend,
+not noise; a split-half comparison sees it, and shrinking θ toward the prior in
+proportion to it took the worst error from 45.7 cents to 13.2.
+
+**§12.10 — polyphony is not implemented as specified, and the design's warning
+stands.** The second NSDF on the unexplained residual was not built. χ² was
+tried in its place and is the wrong statistic — it fires on ordinary sympathetic
+ringing. What catches a second note today is the onset-snapshot rule, which
+excludes anything already sounding, plus the `course` gate. A deliberate strum
+is still the highest-probability confident-wrong-answer path in the system.
+
+**§12.12 — the plumbing is measured, and it was where the bugs were.**
+`tools/browser-test.mjs` drives the published app in a real browser over a real
+audio graph. It found the acknowledgement overlay covering the entire screen,
+and it found that calibrating on synthetic silence disables the masking a real
+room needs — an artefact of the test rig, but the same failure a user would hit
+by calibrating through headphones. All six strings are now identified correctly
+end to end with no console errors. SharedArrayBuffer is **not** used: GitHub
+Pages cannot serve COOP/COEP, so §4's stated fallback — transferring copies by
+`postMessage` — is what ships, and at these rates it costs nothing measurable.
+
+**Two things in §7 needed changing to work at all.** The foreign-partial test of
+§7.3 rejects candidates by implied B, and that is ill-conditioned at low m:
+`dB/d(f1 error)` blows up as m → 1, so an f1 a few cents off makes the *second*
+partial imply a large negative B, and the test discards exactly the low partials
+the fit needs. Asking the reachable question instead — is there any B in the
+physical range reconciling this partial with an f1 inside the acquisition
+tolerance? — is well conditioned everywhere. And acquisition must run **once per
+note**, not continuously: run against its own previous answer it is a feedback
+loop with no reference, and the strong third partial of a hard low E makes it
+oscillate between f and 3f. Guarding that upward locks in any mis-lock at onset;
+allowing downward re-locks freely makes it descend to f/2, f/4. After the lock
+window f1 comes from the fit, which follows a peg turn continuously, and a new
+note arrives through the onset detector.
+
+**Still open, unmeasured.** §12.1 (the per-partial null's accuracy against B̂),
+§12.2 (whether the clarity thresholds inherited from McLeod mean what he meant
+on a gated, Hann-windowed frame — they were set empirically instead), §12.8
+(the beating gate's thresholds are still guesses; it fires on 388 frames of
+2828), §12.9 (a self-consistent wrong fit still produces a low χ²), and §12.11
+(minimum statistics against a phone's own processing, which no offline test and
+no desktop browser can see).
