@@ -6,7 +6,7 @@ should be if it were built again knowing what that prototype found out.
 Measurements quoted come from that prototype against 32 real recordings of one
 guitar, a randomised synthetic sweep, and an independent ground-truth tool.
 
-Revision 3, after two rounds of design review. Section 12 lists what remains
+Revision 4, after three rounds of design review. Section 12 lists what remains
 uncertain.
 
 ---
@@ -128,15 +128,23 @@ the half that is wrong matters. Three different things were being conflated:
 2. **Model misspecification inside the accepted model** — the inharmonicity fit.
    Handled as χ²/dof, inflating the covariance by √(χ²/dof). Note the limitation:
    a self-consistent *wrong* fit has a small residual.
-3. **Categorical failures** — wrong octave, two notes at once, a 12-string
+3. **Known-sign correctable bias** — the residual pitch glide (§8) and the
+   tracker's group delay (§7.2). Both are measured, both are *always in the same
+   direction*, and burying either in a symmetric σ is a mistake with a concrete
+   cost: a player who tunes until the reading reads zero leaves the string flat
+   by that amount, every time. These are corrected or displayed asymmetrically,
+   never averaged into σ. (The sample-clock offset is *not* in this category: its
+   sign and magnitude are both unknown, so a symmetric floor on σ is the honest
+   treatment.)
+4. **Categorical failures** — wrong octave, two notes at once, a 12-string
    course, clipping, a stale room profile, platform AGC left on. **These have no
    variance representation at all.** A wrong-octave answer has σ ≈ 0.2 cents and
    is 1200 cents wrong. Reducing everything to σ hides precisely the failure R7
    exists to prevent.
 
 So: a **small, named set of hypothesis-validity gates** decides whether the
-question is even the right one, and σ measures precision *within* the accepted
-hypothesis. The prototype's problem was not that gates existed — it was that
+question is even the right one, σ measures precision *within* the accepted
+hypothesis, and known-sign biases are corrected rather than absorbed. The prototype's problem was not that gates existed — it was that
 there were twenty-three of them, undocumented, and nothing recorded which one
 suppressed a reading. The cure is to reduce them, name them, and **log which one
 fired**, not to pretend a categorical failure is a variance.
@@ -153,8 +161,8 @@ regardless. Read back `track.getSettings()`, and treat the room calibration as a
 processing probe — AGC shows as level pumping on a decaying note, a platform
 high-pass as attenuation of the low partials. Tell the user when detected.
 
-**Threading.** The AudioWorklet does nothing but copy samples into the ring
-buffer. A 4096-point FFT inside a 2.67 ms render quantum causes dropouts, and a
+**Threading.** The AudioWorklet runs the DC blocker (below) and copies samples
+into the ring buffer, and nothing else. A 4096-point FFT inside a 2.67 ms render quantum causes dropouts, and a
 dropout puts a **gap in the phase record**, which is fatal to §7.2. All analysis
 runs in a Worker over a SharedArrayBuffer. SAB requires cross-origin isolation
 (COOP + COEP), which is a real constraint on a PWA and precludes third-party
@@ -202,12 +210,14 @@ gives only 5.3 periods (outside the rule) and 16384 gives 10.5 at the cost of
 85 ms more latency.
 
 **This window governs acquisition latency only.** Tracking latency is set by the
-heterodyne low-pass of §7.2, which settles in about 24 ms on guitar and 65 ms on
-bass. Decoupling the two is one of the main benefits of heterodyne tracking: a
-bass note can be *tracked* within 65 ms behind a 256 ms acquisition window,
-which substantially relieves the tension with R2 that a single long FFT window
-would create. Acquisition may also run at 10–20 Hz rather than every hop; only
-the partial tracker needs the full rate.
+partial filter of §7.2 — about 49 ms on guitar and 130 ms on bass for the Hann
+integrator recommended there, or 54–88 ms and 144–235 ms for a designed FIR
+depending on the stopband. Decoupling the two is a real benefit of heterodyne
+tracking but a **modest one, roughly a factor of two**, not the factor of four
+an earlier revision claimed on the strength of an unachievable `1/BW` figure: a
+bass note is tracked in ~130 ms behind a 256 ms acquisition window, and at a
+60 dB stopband the advantage disappears entirely. Acquisition may also run at
+10–20 Hz rather than every hop; only the partial tracker needs the full rate.
 
 **Window function.** Hann for the phase path. For the detection and masking
 spectrum use a low-sidelobe window (Nuttall or Blackman–Harris): §2.3 says the
@@ -219,9 +229,20 @@ sidelobe from a strong partial can swamp a weak one and corrupt the mask.
 ## 5. Room model
 
 **What it is.** A per-bin estimate `N[k]` of the power the room produces on its
-own. A bin is admitted when `P[k] > α·N[k]`, α ≈ 6 (≈ 8 dB). The margin must
+own. A bin is admitted when `P[k] > α·N[k]`, α ≈ 6 (7.8 dB). The margin must
 clear the room's own variability, not just its mean: a measured rumble band
 wandered ±6 dB.
+
+**α is traded against R5, not fixed.** R5 asks for four seconds of tracking on a
+softly plucked low E, and §2 measures such partials at 11–39 dB above the room.
+A partial at the bottom of that range has only 3.2 dB of headroom over a 7.8 dB
+threshold and is masked within about a second; holding a reading for four
+seconds needs roughly 12 dB of headroom, i.e. ~20 dB above the room, on at least
+two partials — *after* mains exclusion, beating de-weighting and B-plausibility
+rejection have taken their cut. Every revision of this design has added
+partial-removing machinery and none has checked it against R5. So α is a
+parameter with R5 on one side and false admission on the other, and §13 measures
+tracking duration directly rather than assuming it.
 
 **How it is obtained — minimum statistics, with a manual override.** An earlier
 draft argued that passive inference "cannot work", because a classifier that
@@ -253,16 +274,24 @@ override the manual value. The manual path must also refuse to calibrate when a
 note rings through it — a decaying, strongly periodic signal during calibration
 is detectable, and learning it would be exactly the failure above.
 
-**Staleness.** A profile has a lifetime. Timestamp it; invalidate on device
-change, on sample-rate change, and on a new session. A profile learned at home
-and applied at a gig masks the wrong things.
+**Staleness, and what happens during a rebuild.** A profile has a lifetime.
+Timestamp it; invalidate on device change, on sample-rate change, and on a new
+session, because a profile learned at home and applied at a gig masks the wrong
+things.
+
+Invalidation must not deafen the tuner for the thirty seconds minimum statistics
+needs to rebuild — plugging in headphones should not stop it working. On
+invalidation the tuner **runs on the rebuilding estimate with an inflated α**
+and raises the soft `stale` gate until the estimate matures. The hard `room`
+gate is reserved for the one case that genuinely cannot be worked around: fewer
+than two partials clearing the margin.
 
 **Mains.** Detect the mains frequency (50 or 60 Hz) from the profile and mark
 partials within about one bin of it and its harmonics **unusable**, rather than
 notching blindly. This matters most for bass: the second partial of a low B sits
 at 61.7 Hz, within 1.7 Hz of 60 Hz mains.
 
-**Untunable rooms.** If no partial clears the margin, say so. "Too much
+**Untunable rooms.** If fewer than two partials clear the margin, say so. "Too much
 background noise to tune here" is a better product than a confident wrong number.
 
 ---
@@ -275,7 +304,7 @@ One state variable, four states, driven by evidence already computed.
 |---|---|---|
 | `quiet` | admitted power below threshold for 250 ms | nothing playing |
 | `attack` | onset detected | a note has begun; acknowledge immediately (R4) |
-| `sustain` | 150 ms after onset | the note is measurable |
+| `sustain` | the partial filter of §7.2 has settled (≈50 ms guitar, ≈130 ms bass) | the note is measurable |
 | `release` | first partial's envelope falling, below 2% of its peak | decaying; readings valid but ageing |
 
 **Onset detection** uses two pieces of evidence, because level alone is not
@@ -293,7 +322,22 @@ rises indistinguishable from an onset. Log magnitude is far better behaved, and
 restricting to unexplained bins is enormously more discriminative than broadband
 flux, since a new note is precisely energy at frequencies the current note does
 not explain. The prototype's broadband power flux gave a background p95 of 0.27
-against a softest-pluck value of 0.38 — a margin too thin to use.
+against a softest-pluck value of 0.38 — a margin too thin to use, which is the
+evidence for changing the statistic and **not** a threshold for the new one.
+
+**The threshold for the new statistic must be derived empirically against §13,
+not inherited**, exactly as §7.1 says of McLeod's clarity thresholds. Two
+regimes need separate numbers, because they are different detectors:
+
+- *From `quiet`*: there is no current partial model, so "bins not explained"
+  is every bin and the statistic degenerates to broadband log flux against the
+  room profile.
+- *Over a ringing string*: the partial model exists and does the work, and this
+  is the regime the old statistic failed in.
+
+The two-consecutive-hops requirement is retained in both, because background
+flux is uncorrelated between hops and a real attack is not. R4 is unimplementable
+until both thresholds have numbers, and §12 keeps that open.
 
 The release test uses the **first partial's** envelope from §7.2 rather than
 broadband power, for the reason §9 gives: a broadband envelope falls steeply
@@ -345,9 +389,13 @@ Three implementation requirements that are easy to get wrong:
   transform and before forming `r(τ)`, or pad to 4N.
 - **Use a soft gain, not a binary mask, on this path.** A hard 0/1 mask rings —
   sinc tails around every retained band, the classic spectral-gating artifact.
-  Use `g[k] = max(0, 1 − α·N[k]/P[k])`, smoothed across bins. The hard mask is
-  still the right thing for *selecting* partials in §7.2; it is the wrong thing
-  for a signal that will be autocorrelated.
+  Use `g[k] = max(0, 1 − α·N[k]/P[k])`, smoothed across bins — continuous with
+  the hard mask, since it reaches zero exactly at the admission threshold. The
+  hard mask is still the right thing for *selecting* partials in §7.2; it is the
+  wrong thing for a signal that will be autocorrelated. Note the cost: this
+  attenuates a partial 11 dB above the room by 5.6 dB and one 15 dB above by
+  1.8 dB, so the clarity recalibration below is doing more work than it appears
+  and the resulting threshold is SNR-dependent.
 - **Say which frame the NSDF sees.** The analysis frame is windowed before the
   FFT, so `x̃` carries a taper. `m(τ)` compensates most of it, since it
   normalises by the actual overlap energy, but not exactly, and McLeod's clarity
@@ -389,20 +437,61 @@ remains for masking, flux and acquisition.
 It is *more* expensive than reading an FFT bin, not less: a complex multiply per
 input sample per partial, roughly 4.6 Mflop/s for sixteen partials at 48 kHz,
 against O(1) for a bin lookup on an FFT already being computed. It is chosen for
-correctness, and §12.6 establishes that a few Mflop/s is irrelevant. Decimate
+correctness, and §12.11 establishes that a few Mflop/s is irrelevant. Decimate
 the baseband aggressively — only ±f₁/2 is needed — so that only the mix stage
 runs at full rate; a CIC or moving-average decimator makes the post-mix work
 multiplier-free.
 
-**The low-pass must be specified, because three other claims now rest on it.**
-Its half-bandwidth sits at f₁/2 so the neighbouring partial is rejected: 41 Hz
-for a low E, 15 Hz for a low B. Settling time is about 1/BW — **24 ms on guitar,
-65 ms on bass** — and that, not the FFT window, is the tracking latency (§4).
-Use a linear-phase FIR so group delay is constant across the passband. The mix
-frequency must be **re-centred** as the estimate improves, or the partial drifts
-onto the filter skirt where group delay varies and the phase slope is biased.
-Acquisition precision is sufficient to start: ±20 cents at m = 16 on a low E is
-±15 Hz against a ±41 Hz passband.
+**The low-pass must be specified, because three other claims rest on it.** Two
+parameters are design, not implementation, and an implementer cannot produce the
+right filter without them.
+
+*Passband.* Half-bandwidth f₁/2, so the neighbouring partial sits at the band
+edge: 41 Hz for a low E, 15 Hz for a low B. The transition band is therefore
+BW → 2·BW, as wide as the passband itself, which is what makes this filter
+expensive. Acquisition precision is sufficient to start it: ±20 cents at m = 16
+is 37% of the passband for both guitar and bass.
+
+*Stopband — derived, not chosen.* Leakage from the neighbouring partial at
+relative level ε perturbs the measured phase by up to ε radians, giving a
+frequency error of about `ε/(2πT)` over a fit span T. Setting that against the σ
+budget, and adding the 10–20 dB by which §2.3 says the neighbour may be *louder*
+than the partial being tracked, lands near **60 dB**. That is the number the
+filter must meet, and it is why the bass case is tight.
+
+*Consequent latency.* For a linear-phase FIR the Kaiser estimate
+`N ≈ (A−8)/(2.285·Δω)` gives settling ≈ `A_dB / (22·Δf)`:
+
+| | 40 dB | 60 dB | Hann integrator, T = 4/f₁ |
+|---|---|---|---|
+| guitar low E | 54 ms | 88 ms | 49 ms |
+| bass low B | 144 ms | 235 ms | 130 ms |
+
+An earlier revision quoted 24 ms and 65 ms. Those are the `1/BW` lower bound and
+are **not achievable** at any useful rejection; the figures above replace them,
+and §4's decoupling claim is restated accordingly.
+
+*Recommended structure.* A **Hann-windowed integrate-and-dump at the partial
+frequency, T = 4/f₁**. This is the same object as an FFT bin evaluated at an
+arbitrary re-centred frequency, so it keeps every correctness argument for
+heterodyne — no bin quantisation, no bin migration, arbitrary centre — while
+collapsing the tracking filter and the analysis window into one structure with
+one latency, and T = 4/f₁ is §4's own four-periods resolution rule arriving from
+the other direction. It places the neighbouring partial on a window null, giving
+rejection far better than Hann's −31 dB sidelobe; inharmonicity shifts the
+neighbour slightly off that null, which is the residual to characterise.
+
+*Re-centring.* The mix frequency must be re-centred as the estimate improves, or
+the partial drifts onto the skirt where group delay varies and the phase slope
+is biased.
+
+*Group delay is a known-sign bias and must be removed.* The filter delays the
+tracker output by a known constant, so on a falling pitch the reported frequency
+is **sharp** by `delay × |df/dt|` — 0.22 cents at 44 ms and 5 cents/s, 1.18
+cents at 118 ms and 10 cents/s — compounding with §8's glide bias in the same
+direction. The ring buffer already carries absolute sample indices: timestamp
+the tracker output at `now − group delay` and it vanishes. This is the payoff of
+a decision §4 made and had never cashed.
 
 **Fit a quadratic phase model, not a line.** §2.1 says the pitch chirps downward
 for seconds. Phase under a chirp is quadratic; fitting a straight line recovers
@@ -450,6 +539,13 @@ faster. Gate on modulation depth and rate, restricted to partials that beat
 *incoherently* with the rest of the series, and **de-weight rather than drop** —
 the χ² and robust regression of §7.3 already handle a noisy partial gracefully,
 and §12 notes that on a bass there may be few partials to spare.
+
+**Use a location prior as well as a detector.** When the user has selected a
+string the tuner knows the intended tuning, and therefore knows where the other
+strings' partials will land — the coincidences in standard tuning are
+predictable. De-weight those locations in advance rather than relying solely on
+catching contamination after the fact. This is the same move as §7.3's
+B-plausibility test: prefer a physical prior to a tuned threshold.
 
 ### 7.3 Inharmonicity and f₁ together
 
@@ -515,8 +611,27 @@ begin with. This is not a corner case and needs defined behaviour:
 |---|---|
 | ≥ 4 | joint f₁/B fit as above |
 | 2–3, cached B available | f₁-only fit at the cached B, σ inflated by the cached value's own uncertainty |
-| 2–3, no cached B | f₁-only fit at B = 0, σ inflated by the **full plausible B range** — honest, and often still under 5 cents |
+| 2–3, no cached B | f₁-only fit at B = 0, σ inflated by an **instrument-class B prior** and by the **harmonic numbers that actually survived** (see below) |
 | < 2 | `room` gate: refuse and say why |
+
+The inflation for the B = 0 rung must use an instrument-class prior — B ≤ 2×10⁻⁴
+for a steel-strung guitar — and **not** the 0 to 1.5×10⁻³ range used to reject
+foreign partials, which is a much wider bound serving a different purpose. The
+difference decides whether the rung works at all, and it depends strongly on
+*which* partials survived:
+
+| Surviving partial | cost of assuming B = 0, at B = 2×10⁻⁴ | at 1.5×10⁻³ |
+|---|---|---|
+| m = 2 | 0.52 cents | 3.9 |
+| m = 3 | 1.38 | 10.3 |
+| m = 4 | 2.59 | 19.2 |
+| m = 5 | 4.14 | 30.6 |
+
+Against the rejection bound the rung is dead — σ ≥ 5 always, so §10 would show
+only a note name and never a reading. Against the instrument-class prior, and
+weighted toward whichever low partials survived, it is usable. Surviving at low
+m is worth an order of magnitude over surviving at high m, and the fallback's
+value turns entirely on that.
 
 ---
 
@@ -565,14 +680,40 @@ So bound the displacement, not the rate:
   it decays at the power rate). Taking it locally also sidesteps §9's two-stage
   decay warning entirely: no global exponential is ever fitted, so the "three
   times too fast" failure cannot occur.
-- **`θ·|df/dt|` is a term in σ, not a gate.** It is a measured bound on a
-  residual of known sign, so by §3's taxonomy it is a variance contribution
-  rather than model risk. Folding it into σ also supplies the timeout R2
-  requires: the tuner always commits, and σ simply stays large while the glide
-  is large, instead of never committing if a chirp threshold is never crossed.
-- **Use the known sign.** The glide is always downward. When the reading is
-  sharp and still chirping down, the honest instruction is "wait", not "flatten
-  the string" — genuinely useful, and requiring no model at all.
+- **`d = θ·|df/dt|` is a known-sign bias, and its sign must be used.** The
+  reading is always *sharp* of settled by `d`; it is never flat by it. An
+  earlier revision folded `d` into a symmetric σ, which is safe with respect to
+  R7 and self-resolving — σ large, so the player waits, so `d` shrinks — but it
+  throws away information the system has, and it has a concrete cost: §10 shows
+  readings out to σ = 5, so a player tuning until the number reads zero leaves
+  the string **flat by `d`, every time**. On a firm pluck that is a cent or
+  more, systematic and reproducible, and it is the kind of defect that gets a
+  tuner uninstalled.
+
+  So `d` is handled as §3's third category, not the first:
+
+  - **`d` is binding on the in-tune claim.** No in-tune claim is made while `d`
+    exceeds a third of the tolerance, whatever the reading says. The "wait" hint
+    below already existed; this wires it into the policy rather than leaving it
+    as advice.
+  - **The displayed band is asymmetric**, spanning `reading − d` to `reading`,
+    which is what is actually known about where the settled pitch lies.
+  - `d`'s own uncertainty, `σ_d² = (|df/dt|·σ_θ)² + (θ·σ_{df/dt})²`, contributes
+    to σ in the ordinary way.
+
+  Subtracting `d` outright and reporting `reading − d` is available and would be
+  more accurate still. It is *not* the extrapolation §8 deleted — that was a
+  three-parameter fit to `y∞ + A·e^(−t/θ)` extrapolated to t = ∞ from a fraction
+  of one time constant, whereas this is two well-conditioned local measurements
+  multiplied — but it deserves the reliability diagram's verdict before being
+  trusted, so it is deferred rather than assumed.
+
+  Folding `σ_d` into σ also supplies the timeout R2 requires: the tuner always
+  commits, and σ simply stays large while the glide is large, instead of never
+  committing if a chirp threshold is never crossed.
+- **The sign is also useful to say out loud.** The glide is always downward, so
+  when the reading is sharp and still chirping down, the honest instruction is
+  "wait", not "flatten the string" — requiring no model at all.
 - **Coach the pluck.** The glide amplitude is `A = θ·|df/dt|` evaluated at onset,
   so it is still measured even though the exponential fit is gone; a pluck with
   more than about 15 cents of it should prompt *"plucked hard — softer settles
@@ -584,8 +725,8 @@ So bound the displacement, not the rate:
 ## 9. Amplitude envelope
 
 Per-partial envelopes fall out of the heterodyne in §7.2 and are used in three
-places: the beating detector (§7.2), the convergence criterion (§8), and the
-note state machine's release test (§6). Two cautions:
+places: the beating detector (§7.2), the glide bound `d = θ·|df/dt|` (§8), and
+the note state machine's release test (§6). Two cautions:
 
 - A plucked string's envelope is **not one exponential**: measured on a hard low
   E, 14 dB in the first 1.5 s as the high partials die, then 17 dB over the next
@@ -610,11 +751,11 @@ below branches on.
 | `clipping` | hard | sample magnitude or sustained flat-topping | fake harmonic series with a *low* residual |
 | `polyphony` | hard | unexplained energy is itself harmonically organised at another period | a strum has a plausible period and a plausible B |
 | `octave` | hard | comb GCD ≠ 1, or a continuity break mid-note | σ ≈ 0.2 cents while 1200 cents wrong |
-| `room` | hard | profile absent, or fewer than two partials clear the margin | the mask itself is untrustworthy |
+| `room` | hard | fewer than two partials clear the margin | the mask itself is untrustworthy |
 | `course` | soft | odd and even partials imply different f₁ beyond fit uncertainty | 12-string octave pairs fit well and wrongly |
 | `beating` | soft | incoherent modulation on individual partials (§7.2) | phase slews arbitrarily fast near a beat null |
 | `processing` | soft | AGC or platform filtering detected | envelope and spectrum both unreliable |
-| `stale` | soft | room profile older than its lifetime, or device changed | masking the wrong bands |
+| `stale` | soft | profile older than its lifetime, invalidated, or still rebuilding after a device change | masking the wrong bands, but usable with an inflated α (§5) |
 
 The polyphony gate deserves emphasis: §1 declares polyphony out of scope, but a
 strum will otherwise pass the state machine, acquire *some* period, and return a
@@ -626,17 +767,29 @@ different period. The raw unexplained *fraction* is the wrong statistic, because
 sympathetic ringing is always present on a guitar and is diffuse and weak, while
 a second strummed note is a coherent series. This reuses §7.1 wholesale.
 
-**Layer two — σ, within the accepted hypothesis.** Combining the per-partial
-phase-fit variances (overlap-corrected, §7.2), the f₁/B covariance (§7.3), and
-the admitted-bin SNR, with χ²/dof inflation for model misfit. A **floor of about
-0.1–0.2 cents** applies regardless: phone sample clocks are ±20–50 ppm and some
-devices resample 44.1↔48 kHz inexactly, which is 0.09–0.17 cents of irreducible
-bias that never averages out.
+**Layer two — σ, within the accepted hypothesis.** σ combines exactly five
+terms, and this list is authoritative:
+
+1. per-partial phase-fit variances, corrected for correlated residuals (§7.2);
+2. the f₁/B sandwich covariance evaluated at m² = 1 (§7.3);
+3. admitted-bin SNR;
+4. `σ_d`, the uncertainty of the glide bound (§8) — note that `d` *itself* is
+   not here, because it is a known-sign bias and is handled as one;
+5. χ²/dof inflation for model misfit, computed pre-robustification (§7.3).
+
+A **floor of about 0.1–0.2 cents** applies regardless: phone sample clocks are
+±20–50 ppm and some devices resample 44.1↔48 kHz inexactly, which is 0.09–0.17
+cents of irreducible bias whose sign and magnitude are both unknown — the one
+case where a symmetric floor is the honest treatment.
+
+**Known-sign biases are corrected or shown, never averaged in**: the tracker's
+group delay is removed by timestamping (§7.2), and the glide bound `d` is
+binding on the in-tune claim and displayed as an asymmetric band (§8).
 
 **The display policy.**
 
 ```
-claim "in tune"   only if  |cents| + 2σ ≤ 3          ← this is R7, made testable
+claim "in tune"   only if  |cents| + 2σ ≤ 3  AND  d ≤ 1     ← R7, made testable
 show the reading  when     σ < 5 and no hard gate fired
 show note name    when     σ ≥ 5 or a hard gate fired
 show the reason   when     any gate fired
@@ -645,7 +798,9 @@ acknowledge       always, within 100 ms of the onset
 
 The interval rule is the point. A policy of "σ < 1 and |cents| ≤ 3" would claim
 in-tune at 2.9 cents with σ = 0.99, where the probability of truly exceeding 3
-cents is about 46% — violating R7 at roughly the rate R7 forbids.
+cents is about 46% — violating R7 at roughly the rate R7 forbids. The second
+clause closes the other route to the same failure: a reading can be within 3
+cents *now* and still be a cent sharp of where the string is going.
 
 **σ must be visible**, or the architecture's payoff is thrown away: needle
 thickness or a ghost band proportional to σ, and a written reason whenever a
@@ -715,28 +870,41 @@ Not decoration; each of these changes what the DSP must accept.
    but whether the combined estimate is conservative at p99 across real
    instruments and rooms is unproven, and the correlated-residual correction is
    now derived from a filter that does not yet exist.
-4. **Gate false-positive rates, which nothing currently measures.** A tuner that
+4. **R5 — tracking duration — which nothing in the design bounds.** §5 now shows
+   that a soft low-E partial at the bottom of its measured range has ~3 dB of
+   headroom over the admission threshold and is masked within about a second,
+   while R5 asks for four seconds. Three revisions have added partial-removing
+   machinery and none checked it against this. α is now a parameter traded
+   against R5 and §13 measures the duration, but the trade is unexplored and
+   this may be the requirement that turns out to be unmeetable as specified.
+5. **The onset threshold, which is currently absent rather than uncertain.** The
+   statistic changed (log magnitude, restricted to unexplained bins) and no
+   number replaced the old one; §6 says it must be derived against §13, and
+   until it is, R4 cannot be implemented. This was an acknowledged unknown in an
+   earlier revision that was retired by changing the statistic rather than by
+   resolving it — the one place this document has gone backwards.
+6. **Gate false-positive rates, which nothing currently measures.** A tuner that
    announces "more than one string ringing" on every note is worse than the
    twenty-three booleans were. §13's fixtures test that each gate fires when it
    should; the complement — a corpus of clean single plucks on which **no gate
    may fire** — is the test that matters for the user experience, and it is new.
-5. **The `beating` gate's discrimination in particular.** Separating ordinary
+7. **The `beating` gate's discrimination in particular.** Separating ordinary
    single-string polarisation beating from a genuine foreign partial on depth,
    rate and coherence is the right idea; the thresholds are guesses, and erring
    either way is costly — too tight and good plucks are refused, too loose and
    the phase-slew failure returns.
-6. **The IRLS / χ² interaction.** §7.3 orders them so robustification cannot hide
+8. **The IRLS / χ² interaction.** §7.3 orders them so robustification cannot hide
    misfit, but a self-consistent wrong fit still produces a low χ² by
    construction, and that is the residual hole in the σ story.
-7. **The polyphony threshold.** A second NSDF on the unexplained residual is a
+9. **The polyphony threshold.** A second NSDF on the unexplained residual is a
    much better statistic than raw unexplained fraction, but how much coherent
    residual constitutes a strum — on a guitar whose sympathetic strings are
    always ringing a little — is not established.
-8. **Minimum-statistics tracking on a phone microphone with unknown internal
+10. **Minimum-statistics tracking on a phone microphone with unknown internal
    processing.** The method assumes a stationary noise floor beneath a
    non-stationary signal; platform AGC breaks that assumption in a way the method
    cannot see.
-9. **CPU is not the risk; plumbing is.** A 4096-point FFT at 100 frames/s is
+11. **CPU is not the risk; plumbing is.** A 4096-point FFT at 100 frames/s is
    ~15 Mflop/s and heterodyne tracking adds ~5, together low single-digit percent
    of one core. The risks are dropouts, GC pauses, SAB availability and thermal
    throttling — none of which any offline test can see.
@@ -763,7 +931,7 @@ No change ships without measurement against all four.
   appeared here and nowhere else.
 - **On-device soak** — a real phone, a real room, a full tuning session with the
   screen on, instrumented for dropouts, callback jitter, CPU and thermal state.
-  The three harnesses above are offline and cannot see any of §12.6.
+  The three harnesses above are offline and cannot see any of §12.11.
 
 Additions required by these revisions:
 
@@ -772,6 +940,9 @@ Additions required by these revisions:
 - **fixtures for each categorical gate** — a clipped pluck, a strum, a 12-string
   course, a re-pluck engineered to beat, a session with a deliberately stale room
   profile — testing that each gate fires when it should;
+- **tracking duration as a measured quantity** — time from onset to loss of
+  reading, by string and pluck strength — scored against R5, so that α (§5) is
+  tuned against evidence rather than assumed;
 - a **clean-pluck corpus on which no gate may fire**, testing the complement.
   Gate *recall* is what the fixtures measure; gate *precision* is what determines
   whether the tuner is usable, and it is the easier property to lose. A design
